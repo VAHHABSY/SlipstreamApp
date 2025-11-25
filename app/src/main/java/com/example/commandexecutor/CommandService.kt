@@ -358,9 +358,9 @@ class CommandService : LifecycleService(), CoroutineScope {
                         }
 
                         private fun cleanUpLingeringProcesses() {
-                            Log.w(TAG, "Attempting to clean up lingering processes...")
-                            val pkillSlipstream = listOf("su", "-c", "pkill -9 ${BINARY_NAME}")
-                            executeCleanupCommand(pkillSlipstream, "pkill ${BINARY_NAME}")
+                            Log.w(TAG, "Attempting to clean up lingering processes using killall...")
+                            val killallSlipstream = listOf("su", "-c", "killall -9 ${BINARY_NAME}")
+                            executeCleanupCommand(killallSlipstream, "killall ${BINARY_NAME}")
                         }
 
                         private fun executeCleanupCommand(command: List<String>, logTag: String) {
@@ -371,8 +371,9 @@ class CommandService : LifecycleService(), CoroutineScope {
 
                                 val exited = process.waitFor(1, TimeUnit.SECONDS)
                                 if (exited) {
+                                    // killall returns 1 if no process was found, which is OK.
                                     if (process.exitValue() != 0) {
-                                        // pkill returns 1 if no process was found, which is OK.
+                                        Log.d(TAG, "Cleanup command $logTag returned non-zero exit code, likely meaning no processes were running.")
                                     }
                                 } else {
                                     process.destroyForcibly()
