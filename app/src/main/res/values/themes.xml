@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme. Uses a standard material theme parent. -->
+    <style name="Theme.CommandExecutor" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">#4CAF50</item>
+        <item name="colorSecondary">#8BC34A</item>
+        <item name="colorError">#F44336</item>
+        <item name="colorSurface">@android:color/white</item>
+    </style>
+</resources>
