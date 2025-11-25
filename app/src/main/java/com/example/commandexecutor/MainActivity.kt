@@ -22,11 +22,12 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 class MainActivity : AppCompatActivity() {
 
     private val TAG = "CommandExecutor"
-    private lateinit var ipInput: EditText       // Field for IP
-        private lateinit var domainInput: EditText   // Field for Domain
-            private lateinit var tunnelSwitch: Switch    // NEW: Switch to control start/stop
+    private lateinit var ipInput: EditText
+        private lateinit var domainInput: EditText
+            private lateinit var tunnelSwitch: Switch
+                // Removed monitoringCheckbox and thresholdInput references
 
-                // New UI status elements
+                // UI status elements
                 private lateinit var slipstreamStatusIndicator: TextView
                     private lateinit var slipstreamStatusText: TextView
                         private lateinit var sshStatusIndicator: TextView
@@ -37,12 +38,13 @@ class MainActivity : AppCompatActivity() {
                                     // Flag to prevent infinite loop when programmatically changing the switch state
                                     private var isUpdatingSwitch = false
 
-                                    // Keys for SharedPreferences
+                                    // Keys for SharedPreferences (Monitoring keys removed)
                                     private val PREF_IP_ADDRESS = "pref_ip_address"
                                     private val PREF_DOMAIN_NAME = "pref_domain_name"
+
                                     private val DEFAULT_IP = "1.1.1.1"
                                     private val DEFAULT_DOMAIN = "example.com"
-
+                                    // DEFAULT_THRESHOLD removed as it's no longer configured by the user
 
                                     // Broadcast Receiver to handle status updates from the service
                                     private val statusReceiver = object : BroadcastReceiver() {
@@ -97,7 +99,8 @@ class MainActivity : AppCompatActivity() {
                                         // Initialize UI components from the layout
                                         ipInput = findViewById(R.id.ip_input)
                                         domainInput = findViewById(R.id.domain_input)
-                                        tunnelSwitch = findViewById(R.id.tunnel_switch) // Initialize the new Switch
+                                        tunnelSwitch = findViewById(R.id.tunnel_switch)
+                                        // Monitoring UI elements were removed from layout
 
                                         // Initialize UI status components
                                         slipstreamStatusIndicator = findViewById(R.id.slipstream_status_indicator)
@@ -106,11 +109,8 @@ class MainActivity : AppCompatActivity() {
                                         sshStatusText = findViewById(R.id.ssh_status_text)
 
                                         // --- Load stored values or use defaults ---
-                                        val storedIp = sharedPreferences.getString(PREF_IP_ADDRESS, DEFAULT_IP)
-                                        val storedDomain = sharedPreferences.getString(PREF_DOMAIN_NAME, DEFAULT_DOMAIN)
-
-                                        ipInput.setText(storedIp)
-                                        domainInput.setText(storedDomain)
+                                        ipInput.setText(sharedPreferences.getString(PREF_IP_ADDRESS, DEFAULT_IP))
+                                        domainInput.setText(sharedPreferences.getString(PREF_DOMAIN_NAME, DEFAULT_DOMAIN))
 
                                         // --- Set initial status ---
                                         updateStatusUI("Stopped", "Stopped")
@@ -120,7 +120,7 @@ class MainActivity : AppCompatActivity() {
                                             // Ignore programmatic changes to the switch that happen during status updates
                                             if (isUpdatingSwitch) return@setOnCheckedChangeListener
 
-                                                // Save inputs immediately upon interaction
+                                                // Save inputs upon interaction
                                                 saveInputs()
 
                                                 if (isChecked) {
@@ -147,7 +147,6 @@ class MainActivity : AppCompatActivity() {
                                     }
 
                                     override fun onDestroy() {
-                                        // --- Unregister Broadcast Receiver ---
                                         LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver)
                                         super.onDestroy()
                                     }
@@ -156,8 +155,9 @@ class MainActivity : AppCompatActivity() {
                                         val editor = sharedPreferences.edit()
                                         editor.putString(PREF_IP_ADDRESS, ipInput.text.toString().trim())
                                         editor.putString(PREF_DOMAIN_NAME, domainInput.text.toString().trim())
+                                        // Monitoring preferences removal confirmed
                                         editor.apply()
-                                        Log.d(TAG, "Saved IP and Domain to SharedPreferences.")
+                                        Log.d(TAG, "Saved configuration to SharedPreferences.")
                                     }
 
                                     private fun checkPermissionsAndStartService() {
@@ -177,6 +177,11 @@ class MainActivity : AppCompatActivity() {
                                         val ipAddress = ipInput.text.toString().trim()
                                         val domainName = domainInput.text.toString().trim()
 
+                                        // Hardcode monitoring settings since they are no longer user-configurable
+                                        val monitoringEnabled = false
+                                        val monitoringThreshold = 0L
+
+
                                         if (ipAddress.isBlank() || domainName.isBlank()) {
                                             Toast.makeText(this, "IP Address and Domain are required for slipstream-client.", Toast.LENGTH_LONG).show()
 
@@ -187,26 +192,24 @@ class MainActivity : AppCompatActivity() {
                                             return
                                         }
 
-                                        // Log the actual inputs being sent
-                                        Log.i(TAG, "Sending inputs to service: IP=$ipAddress, Domain=$domainName")
+                                        Log.i(TAG, "Starting service. Monitor: $monitoringEnabled, Threshold: $monitoringThreshold ms (Hardcoded)")
 
                                         val serviceIntent = Intent(this, CommandService::class.java).apply {
-                                            // Pass IP and Domain using the constants defined in CommandService
                                             putExtra(CommandService.EXTRA_IP_ADDRESS, ipAddress)
                                             putExtra(CommandService.EXTRA_DOMAIN, domainName)
+                                            // Pass hardcoded values for Service compatibility
+                                            putExtra(CommandService.EXTRA_MONITORING_ENABLED, monitoringEnabled)
+                                            putExtra(CommandService.EXTRA_MONITORING_THRESHOLD, monitoringThreshold)
                                         }
 
-                                        // Start the service as a foreground service
                                         ContextCompat.startForegroundService(this, serviceIntent)
                                         Toast.makeText(this, "Service Start Signal Sent", Toast.LENGTH_SHORT).show()
 
-                                        // Set initial UI status immediately to reflect the start signal
                                         updateStatusUI("Starting...", "Waiting...")
                                     }
 
                                     /**
-                                     * Updates the status indicators and text based on broadcasts from the service.
-                                     * Uses: ✔ (green check), ❌ (red X), 🟡 (yellow circle/starting)
+                                     * Updates the status indicators and switch state based on broadcasts from the service.
                                      */
                                     private fun updateStatusUI(slipstreamStatus: String? = null, sshStatus: String? = null) {
 
@@ -249,7 +252,6 @@ class MainActivity : AppCompatActivity() {
                                         }
 
                                         // 3. Update Switch State based on Slipstream status (which is the primary process)
-                                        // This is done to synchronize the UI with the service's actual state (e.g., if it fails)
                                         slipstreamStatus?.let { status ->
                                             if (isUpdatingSwitch) return@let // Prevent re-triggering the listener
 

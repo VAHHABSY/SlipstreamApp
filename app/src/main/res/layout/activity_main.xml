@@ -6,7 +6,7 @@
                                                    android:padding="16dp"
                                                    tools:context=".MainActivity">
 
-    <!-- Title: Uses a theme-aware TextAppearance to ensure text contrast -->
+    <!-- Title: Ensures text contrast for dark themes -->
     <TextView
         android:id="@+id/title_text"
         android:layout_width="0dp"
@@ -21,7 +21,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         />
 
-    <!-- New Switch for Tunnel On/Off -->
+    <!-- Switch for Tunnel On/Off -->
     <Switch
         android:id="@+id/tunnel_switch"
         android:layout_width="0dp"
@@ -36,7 +36,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         />
 
-    <!-- Input 1: Resolver IP Address (Now constrained below the Switch) -->
+    <!-- Input 1: Resolver IP Address -->
     <EditText
         android:id="@+id/ip_input"
         android:layout_width="0dp"
@@ -64,7 +64,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         />
 
-    <!-- Status Section Title -->
+    <!-- Status Section Title - Now connects directly below domain_input -->
     <TextView
         android:id="@+id/status_section_title"
         android:layout_width="wrap_content"
@@ -148,7 +148,5 @@
         app:layout_constraintTop_toTopOf="@id/ssh_label"
         app:layout_constraintBottom_toBottomOf="@id/ssh_label"
         />
-
-    <!-- The original Start and Stop buttons have been removed. -->
 
     </androidx.constraintlayout.widget.ConstraintLayout>

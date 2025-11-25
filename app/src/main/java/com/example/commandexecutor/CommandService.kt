@@ -1,6 +1,8 @@
 package com.example.commandexecutor
 
+import android.app.Notification
 import android.app.NotificationChannel
+import android.app.PendingIntent
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -12,394 +14,422 @@ import androidx.lifecycle.LifecycleService
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
-import java.io.BufferedReader
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.CoroutineContext
 
 // Data class to hold the execution result (for clarity in complex logic)
 data class CommandResult(val exitCode: Int, val output: String)
 
-class CommandService : LifecycleService() {
+// CommandService now implements CoroutineScope to correctly handle 'launch' and 'isActive'
+class CommandService : LifecycleService(), CoroutineScope {
+
+    // Define the CoroutineScope for the service lifecycle (SupervisorJob to prevent child failures from killing others)
+    private val job = SupervisorJob()
+    override val coroutineContext: CoroutineContext = job + Dispatchers.IO
 
     private val TAG = "CommandService"
     private val NOTIFICATION_CHANNEL_ID = "CommandServiceChannel"
     private val NOTIFICATION_ID = 101
 
-    // Global variables to hold references to the long-running processes
+    // Global variables for tunnel management
     private var slipstreamProcess: Process? = null
         private var sshProcess: Process? = null
+            private var processOutputReaderJob: Job? = null
 
-            companion object {
-                // Inputs for slipstream-client command line arguments
-                const val EXTRA_IP_ADDRESS = "ip_address"
-                const val EXTRA_DOMAIN = "domain_name"
+                // Mutex to prevent simultaneous starting/stopping/restarting
+                private val tunnelMutex = Mutex()
 
-                // Corrected binary name
-                const val BINARY_NAME = "slipstream-client"
+                // Configuration variables passed from Activity (kept for completeness, though unused in logic)
+                private var monitoringEnabled = false
+                private var monitoringThreshold = 3000L
+                private var ipAddressConfig: String = ""
+                    private var domainNameConfig: String = ""
 
-                // Broadcast actions
-                const val ACTION_STATUS_UPDATE = "com.example.commandexecutor.STATUS_UPDATE"
-                const val ACTION_ERROR = "com.example.commandexecutor.ERROR"
+                        companion object {
+                            // Inputs & Config
+                            const val EXTRA_IP_ADDRESS = "ip_address"
+                            const val EXTRA_DOMAIN = "domain_name"
+                            const val EXTRA_MONITORING_ENABLED = "monitoring_enabled"
+                            const val EXTRA_MONITORING_THRESHOLD = "monitoring_threshold"
 
-                // Broadcast extras
-                const val EXTRA_STATUS_SLIPSTREAM = "status_slipstream"
-                // FIXED: Removed the extraneous 'val' keyword that caused the compilation error
-                const val EXTRA_STATUS_SSH = "status_ssh"
-                const val EXTRA_ERROR_MESSAGE = "error_message"
-                const val EXTRA_ERROR_OUTPUT = "error_output"
-            }
+                            // Corrected binary name
+                            const val BINARY_NAME = "slipstream-client"
 
-            override fun onCreate() {
-                super.onCreate()
-                createNotificationChannel()
-            }
+                            // Broadcast actions
+                            const val ACTION_STATUS_UPDATE = "com.example.commandexecutor.STATUS_UPDATE"
+                            const val ACTION_ERROR = "com.example.commandexecutor.ERROR"
 
-            override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                super.onStartCommand(intent, flags, startId)
-
-                // Retrieve the user inputs
-                val ipAddress = intent?.getStringExtra(EXTRA_IP_ADDRESS) ?: ""
-                val domainName = intent?.getStringExtra(EXTRA_DOMAIN) ?: ""
-
-                Log.d(TAG, "Service started. IP: $ipAddress, Domain: $domainName")
-
-                // 1. Start as Foreground Service, required for long-running tasks on modern Android
-                startForeground(NOTIFICATION_ID, buildForegroundNotification())
-
-                // 2. Execute commands on a background thread (Dispatchers.IO)
-                CoroutineScope(Dispatchers.IO).launch {
-
-                    // Send initial waiting status to UI
-                    sendStatusUpdate(slipstreamStatus = "Cleaning up...", sshStatus = "Waiting...")
-
-                    // Clean up any previous, lingering slipstream-client processes
-                    cleanUpLingeringProcesses()
-
-                    val binaryPath = copyBinaryToFilesDir(BINARY_NAME)
-                    if (binaryPath != null) {
-                        // Pass only required arguments
-                        executeCommands(binaryPath, ipAddress, domainName)
-                    } else {
-                        Log.e(TAG, "Failed to prepare '$BINARY_NAME' binary for execution.")
-                        sendError("Binary Error", "Failed to prepare '$BINARY_NAME' binary for execution.")
-                    }
-                }
-
-                return START_STICKY // Service should restart if killed by the OS
-            }
-
-            // --- Foreground Service Setup ---
-
-            private fun createNotificationChannel() {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    val channel = NotificationChannel(
-                        NOTIFICATION_CHANNEL_ID,
-                        "Command Executor Status",
-                        NotificationManager.IMPORTANCE_DEFAULT
-                    )
-                    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    manager.createNotificationChannel(channel)
-                }
-            }
-
-            private fun buildForegroundNotification() = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Slipstream Tunnel Running")
-            .setContentText("Establishing DNS/QUIC covert channel...")
-            // Using a reliable system icon to prevent the crash observed in the logs
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setOnlyAlertOnce(true)
-            .build()
-
-            // --- Broadcast Helpers ---
-
-            private fun sendStatusUpdate(slipstreamStatus: String? = null, sshStatus: String? = null) {
-                val intent = Intent(ACTION_STATUS_UPDATE)
-                slipstreamStatus?.let { intent.putExtra(EXTRA_STATUS_SLIPSTREAM, it) }
-                sshStatus?.let { intent.putExtra(EXTRA_STATUS_SSH, it) }
-                LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
-            }
-
-            private fun sendError(message: String, output: String) {
-                val intent = Intent(ACTION_ERROR).apply {
-                    putExtra(EXTRA_ERROR_MESSAGE, message)
-                    putExtra(EXTRA_ERROR_OUTPUT, output)
-                }
-                LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
-                // Also ensure UI is set to stopped/failed state after error
-                sendStatusUpdate(slipstreamStatus = "Failed", sshStatus = "Stopped")
-            }
-
-            // --- Binary Preparation ---
-
-            /**
-             * Copies the bundled binary (assumed to be in `src/main/assets/slipstream-client`)
-             * to the app's files directory and sets executable permissions.
-             */
-            private fun copyBinaryToFilesDir(binaryName: String): String? {
-                val destFile = File(filesDir, binaryName)
-                if (destFile.exists()) {
-                    Log.d(TAG, "$binaryName already exists, skipping copy.")
-                    return destFile.absolutePath
-                }
-
-                try {
-                    assets.open(binaryName).use { input ->
-                        destFile.outputStream().use { output ->
-                            input.copyTo(output)
+                            // Broadcast extras
+                            const val EXTRA_STATUS_SLIPSTREAM = "status_slipstream"
+                            const val EXTRA_STATUS_SSH = "status_ssh"
+                            const val EXTRA_ERROR_MESSAGE = "error_message"
+                            const val EXTRA_ERROR_OUTPUT = "error_output"
                         }
-                    }
-                    // Set executable permission (crucial for native binaries)
-                    destFile.setExecutable(true, false)
-                    Log.d(TAG, "Successfully copied and set executable permission for: ${destFile.absolutePath}")
-                    return destFile.absolutePath
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error copying binary '$binaryName': ${e.message}", e)
-                    return null
-                }
-            }
 
-            // --- Process Cleanup ---
-
-            /**
-             * Attempts to find and kill any running processes related to slipstream-client.
-             * We avoid killing generic 'ssh' processes.
-             */
-            private fun cleanUpLingeringProcesses() {
-                Log.w(TAG, "Attempting to clean up lingering processes...")
-
-                // 1. Kill slipstream-client using pkill -9
-                val pkillSlipstream = listOf("su", "-c", "pkill -9 ${BINARY_NAME}")
-                executeCleanupCommand(pkillSlipstream, "pkill ${BINARY_NAME}")
-
-                Log.i(TAG, "Cleanup completed. Only slipstream-client was targeted.")
-            }
-
-            /**
-             * Executes a simple shell command intended for cleanup (no input, short execution).
-             */
-            private fun executeCleanupCommand(command: List<String>, logTag: String) {
-                try {
-                    Log.d(TAG, "Executing cleanup command: ${command.joinToString(" ")}")
-                    val process = ProcessBuilder(command)
-                    .redirectErrorStream(true)
-                    .start()
-
-                    // Wait a short time for the command to execute
-                    val exited = process.waitFor(1, TimeUnit.SECONDS)
-
-                    // Log output in case of error or warning (e.g., pkill not finding the process)
-                    val reader = BufferedReader(InputStreamReader(process.inputStream))
-                    val output = reader.readText().trim()
-                    if (output.isNotBlank()) {
-                        Log.w(TAG, "$logTag Output: $output")
-                    }
-
-                    if (exited) {
-                        val exitCode = process.exitValue()
-                        if (exitCode != 0) {
-                            // pkill returns 1 if no process was found, which is a success for cleanup.
-                            Log.w(TAG, "$logTag finished with exit code: $exitCode (Process likely not found, which is OK).")
-                        } else {
-                            Log.i(TAG, "$logTag successfully killed processes.")
+                        override fun onCreate() {
+                            super.onCreate()
+                            createNotificationChannel()
                         }
-                    } else {
-                        // If it didn't exit, something went wrong with the cleanup command itself.
-                        Log.e(TAG, "Cleanup command $logTag did not exit within timeout.")
-                        process.destroyForcibly()
-                    }
 
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error executing cleanup command $logTag: ${e.message}", e)
-                }
-            }
+                        override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                            super.onStartCommand(intent, flags, startId)
 
-            // --- Command Execution ---
+                            // Retrieve and SAVE configuration into member variables
+                            ipAddressConfig = intent?.getStringExtra(EXTRA_IP_ADDRESS) ?: ""
+                            domainNameConfig = intent?.getStringExtra(EXTRA_DOMAIN) ?: ""
+                            monitoringEnabled = intent?.getBooleanExtra(EXTRA_MONITORING_ENABLED, false) ?: false
+                            monitoringThreshold = intent?.getLongExtra(EXTRA_MONITORING_THRESHOLD, 3000L) ?: 3000L
 
-            /**
-             * Executes the two required shell commands.
-             */
-            private suspend fun executeCommands(
-                slipstreamClientPath: String,
-                ipAddress: String,
-                domainName: String
-            ) {
-                // Log the actual received inputs again
-                Log.i(TAG, "Starting command execution with IP: '$ipAddress' and Domain: '$domainName'")
+                            Log.d(TAG, "Service started. IP: $ipAddressConfig, Domain: $domainNameConfig, Monitor: $monitoringEnabled, Threshold: $monitoringThreshold ms")
 
-                sendStatusUpdate(slipstreamStatus = "Starting...", sshStatus = "Waiting...")
+                            // Start foreground service with clickable notification
+                            startForeground(NOTIFICATION_ID, buildForegroundNotification())
 
-                // Command 1: Execution of the bundled slipstream-client binary
-                // Note: The empty IP in the log caused the client to execute as "--resolver=:53", which is invalid.
-                val command1 = listOf(
-                    slipstreamClientPath,
-                    "--congestion-control=bbr",
-                    "--resolver=$ipAddress:53", // $ipAddress will now correctly be passed if non-empty
-                    "--domain=$domainName"
-                )
+                            // Use the service's CoroutineScope (Dispatchers.IO) via 'launch'
+                            launch {
+                                // Start the tunnel sequence
+                                startTunnelSequence(ipAddressConfig, domainNameConfig)
+                            }
 
-                // 1. Start slipstream-client and wait for connection confirmation (2000ms timeout)
-                val confirmationMessage = "Connection confirmed."
-                val slipstreamResult = startLongRunningProcess(command1, BINARY_NAME, 2000L, confirmationMessage)
-                slipstreamProcess = slipstreamResult.second
+                            return START_STICKY
+                        }
 
-                if (slipstreamResult.first.contains(confirmationMessage, ignoreCase = false)) {
-                    Log.i(TAG, "$BINARY_NAME output confirmed successful connection. Proceeding with ssh.")
+                        /**
+                         * The main execution sequence: cleans up, copies binary, and starts the tunnel.
+                         * Monitoring logic has been removed entirely.
+                         */
+                        private suspend fun startTunnelSequence(ipAddress: String, domainName: String) {
+                            tunnelMutex.withLock {
 
-                    sendStatusUpdate(slipstreamStatus = "Running", sshStatus = "Starting...")
+                                sendStatusUpdate(slipstreamStatus = "Cleaning up...", sshStatus = "Waiting...")
+                                cleanUpLingeringProcesses()
 
-                    delay(500L) // Wait for 500 milliseconds for port stability
+                                val binaryPath = copyBinaryToFilesDir(BINARY_NAME)
+                                if (binaryPath != null) {
+                                    // Simply execute the commands. executeCommands handles errors and stopSelf.
+                                    executeCommands(binaryPath, ipAddress, domainName)
+                                } else {
+                                    Log.e(TAG, "Failed to prepare '$BINARY_NAME' binary for execution.")
+                                    sendError("Binary Error", "Failed to prepare '$BINARY_NAME' binary for execution.")
+                                }
+                            }
+                        }
 
-                    // Command 2: Execution of system-preinstalled ssh binary, wrapped in 'su -c'.
-                    val sshArgs = "-p 5201 -ND 3080 root@localhost"
-                    val shellCommand = "ssh $sshArgs"
+                        /**
+                         * Executes the two shell commands: slipstream-client and ssh.
+                         * Returns true if successful, false otherwise.
+                         */
+                        private suspend fun executeCommands(
+                            slipstreamClientPath: String,
+                            ipAddress: String,
+                            domainName: String
+                        ): Boolean {
+                            // Stop any running jobs before starting new processes
+                            processOutputReaderJob?.cancel()
+                            processOutputReaderJob = null
 
-                    val command2 = listOf(
-                        "su",
-                        "-c",
-                        shellCommand
-                    )
+                            Log.i(TAG, "Starting command execution with IP: '$ipAddress' and Domain: '$domainName'")
 
-                    // 2. Start ssh (no read timeout, we just start and let it run)
-                    val sshResult = startLongRunningProcess(command2, "ssh", null, null)
-                    sshProcess = sshResult.second
+                            sendStatusUpdate(slipstreamStatus = "Starting...", sshStatus = "Waiting...")
 
-                    // Check if ssh failed immediately
-                    if (sshProcess?.isAlive == true) {
-                        sendStatusUpdate(sshStatus = "Running")
-                    } else {
-                        sendError("SSH Start Error", "SSH tunnel failed to start. Output:\n${sshResult.first}")
-                        // Since SSH failed, kill slipstream and stop service
-                        killProcess(slipstreamProcess, BINARY_NAME)
-                        stopSelf()
-                    }
+                            // Command 1: slipstream-client
+                            val command1 = listOf(
+                                slipstreamClientPath,
+                                "--congestion-control=bbr",
+                                "--resolver=$ipAddress:53",
+                                "--domain=$domainName"
+                            )
 
+                            // 1. Start slipstream-client and wait for connection confirmation (2000ms timeout)
+                            val confirmationMessage = "Connection confirmed."
+                            val slipstreamStartResult = startProcessWithOutputCheck(command1, BINARY_NAME, 2000L, confirmationMessage)
+                            slipstreamProcess = slipstreamStartResult.second
 
-                } else {
-                    val errorMessage = "$BINARY_NAME failed to confirm connection."
-                    Log.w(TAG, errorMessage)
-                    sendError(errorMessage, slipstreamResult.first) // Send error with output
-                    // Since the slipstream-client failed to connect or time out, we should stop it immediately.
-                    killProcess(slipstreamProcess, BINARY_NAME)
-                    stopSelf()
-                }
-            }
+                            if (slipstreamStartResult.first.contains(confirmationMessage, ignoreCase = false)) {
+                                Log.i(TAG, "$BINARY_NAME output confirmed successful connection. Proceeding with ssh.")
 
-            /**
-             * Starts a shell command, reads initial output with an optional timeout, and returns the Process object.
-             */
-            private suspend fun startLongRunningProcess(
-                command: List<String>,
-                logTag: String,
-                readTimeoutMillis: Long?,
-                successMessage: String?
-            ): Pair<String, Process> {
-                try {
-                    Log.i(TAG, "Starting $logTag execution: ${command.joinToString(" ")}")
+                                // Start job to monitor slipstream's ongoing output (only for live logging)
+                                processOutputReaderJob = launch { readProcessOutput(slipstreamProcess!!, BINARY_NAME) }
 
-                    val process = ProcessBuilder(command)
-                    .redirectErrorStream(true)
-                    .start()
+                                sendStatusUpdate(slipstreamStatus = "Running", sshStatus = "Starting...")
 
-                    val output = StringBuilder()
-                    val reader = BufferedReader(InputStreamReader(process.inputStream))
+                                delay(500L)
 
-                    if (readTimeoutMillis != null) {
-                        withTimeoutOrNull(readTimeoutMillis) {
-                            var line: String?
-                            while (reader.readLine().also { line = it } != null) {
-                                output.append(line).append('\n')
-                                if (line?.isNotBlank() == true) Log.d(TAG, "$logTag Output: $line")
+                                // Command 2: ssh tunnel
+                                val sshArgs = "-p 5201 -ND 3080 root@localhost"
+                                val shellCommand = "ssh $sshArgs"
+                                val command2 = listOf("su", "-c", shellCommand)
 
-                                    // Break if success message is found
-                                    if (successMessage != null && line?.contains(successMessage, ignoreCase = false) == true) {
-                                        Log.d(TAG, "$logTag Success message found, stopping initial output read and proceeding.")
-                                        break
+                                // 2. Start ssh (no read timeout, we just start and let it run)
+                                val sshStartResult = startProcessWithOutputCheck(command2, "ssh", null, null)
+                                sshProcess = sshStartResult.second
+
+                                if (sshProcess?.isAlive == true) {
+                                    sendStatusUpdate(sshStatus = "Running")
+                                    return true
+                                } else {
+                                    sendError("SSH Start Error", "SSH tunnel failed to start. Output:\n${sshStartResult.first}")
+                                    killProcess(slipstreamProcess, BINARY_NAME) // Kill slipstream if ssh failed
+                                    stopSelf()
+                                    return false
+                                }
+                            } else {
+                                val errorMessage = "$BINARY_NAME failed to confirm connection or timed out."
+                                Log.w(TAG, errorMessage)
+                                sendError(errorMessage, slipstreamStartResult.first)
+                                killProcess(slipstreamProcess, BINARY_NAME)
+                                stopSelf()
+                                return false
+                            }
+                        }
+
+                        /**
+                         * Starts a shell command, reads initial output with an optional timeout, and returns the Process object.
+                         */
+                        private suspend fun startProcessWithOutputCheck(
+                            command: List<String>,
+                            logTag: String,
+                            readTimeoutMillis: Long?,
+                            successMessage: String?
+                        ): Pair<String, Process> {
+                            // Implementation remains similar, focusing on initial confirmation.
+                            // The process output stream is handled by readProcessOutput for ongoing monitoring.
+                            try {
+                                Log.i(TAG, "Starting $logTag execution: ${command.joinToString(" ")}")
+
+                                val process = ProcessBuilder(command)
+                                .redirectErrorStream(true)
+                                .start()
+
+                                val output = StringBuilder()
+                                val reader = BufferedReader(InputStreamReader(process.inputStream))
+
+                                if (readTimeoutMillis != null) {
+                                    withTimeoutOrNull(readTimeoutMillis) {
+                                        var line: String?
+                                        while (reader.readLine().also { line = it } != null) {
+                                            output.append(line).append('\n')
+                                            if (line?.isNotBlank() == true) Log.d(TAG, "$logTag Startup Output: $line")
+
+                                                if (successMessage != null && line?.contains(successMessage, ignoreCase = false) == true) {
+                                                    Log.d(TAG, "$logTag Success message found, confirming startup.")
+                                                    break
+                                                }
+                                        }
+                                        true
                                     }
+                                } else {
+                                    if (process.isAlive) {
+                                        Log.d(TAG, "$logTag is running in the background.")
+                                    } else {
+                                        var line: String?
+                                        while (reader.readLine().also { line = it } != null) {
+                                            output.append(line).append('\n')
+                                            if (line?.isNotBlank() == true) Log.d(TAG, "$logTag Initial Output: $line")
+                                        }
+                                    }
+                                }
+
+                                return Pair(output.toString().trim(), process)
+
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error executing $logTag command: ${e.message}", e)
+                                return Pair("Execution Error: ${e.message}", ProcessBuilder("echo", "error").start())
                             }
-                            true
                         }
-                    } else {
-                        // For long-running processes like ssh, we only check if it started correctly
-                        if (process.isAlive) {
-                            Log.d(TAG, "$logTag is running in the background. Stopping output read.")
-                        } else {
-                            // Capture final output if the process exited immediately
-                            var line: String?
-                            while (reader.readLine().also { line = it } != null) {
-                                output.append(line).append('\n')
-                                if (line?.isNotBlank() == true) Log.d(TAG, "$logTag Initial Output: $line")
+
+                        /**
+                         * Coroutine job to read the slipstream process output and log it (the "Live Output" feature).
+                         */
+                        private suspend fun readProcessOutput(process: Process, logTag: String) {
+                            val reader = BufferedReader(InputStreamReader(process.inputStream))
+                            try {
+                                var line: String?
+                                while (isActive && process.isAlive) {
+                                    if (reader.ready()) {
+                                        line = reader.readLine()
+                                        if (line != null) {
+                                            Log.d(TAG, "$logTag Live Output: $line") // Log all output
+                                        }
+                                    } else {
+                                        // Short delay to prevent busy-waiting if nothing is ready
+                                        delay(10)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error reading $logTag output: ${e.message}", e)
+                            } finally {
+                                Log.i(TAG, "$logTag output reader job finished.")
+                                reader.close()
                             }
                         }
-                    }
 
-                    return Pair(output.toString().trim(), process)
+                        // --- Cleanup & Helpers ---
 
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error executing $logTag command: ${e.message}", e)
-                    // Return dummy process if failed to start
-                    return Pair("Execution Error: ${e.message}", ProcessBuilder("echo", "error").start())
-                }
-            }
-
-
-            /**
-             * Attempts a graceful (SIGTERM) then forced (SIGKILL) termination of a native process.
-             */
-            private fun killProcess(process: Process?, tag: String) {
-                if (process != null && process.isAlive) {
-                    Log.w(TAG, "Attempting graceful termination (SIGTERM) for $tag.")
-                    process.destroy() // Sends SIGTERM (standard termination signal)
-                    try {
-                        // Wait up to 1 second for graceful shutdown
-                        if (!process.waitFor(1000, TimeUnit.MILLISECONDS)) {
-                            Log.e(TAG, "Graceful termination failed. Forcing kill (SIGKILL) for $tag.")
-                            process.destroyForcibly()
+                        private fun createNotificationChannel() {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                val channel = NotificationChannel(
+                                    NOTIFICATION_CHANNEL_ID,
+                                    "Command Executor Status",
+                                    NotificationManager.IMPORTANCE_DEFAULT
+                                )
+                                val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                                manager.createNotificationChannel(channel)
+                            }
                         }
-                        Log.i(TAG, "$tag process successfully terminated.")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error waiting/forcing termination for $tag: ${e.message}")
-                        // Fallback: forcefully kill it
-                        if (process.isAlive) {
-                            process.destroyForcibly()
+
+                        /**
+                         * Builds the foreground notification, including a PendingIntent to open MainActivity.
+                         */
+                        private fun buildForegroundNotification(): Notification {
+                            // Intent to launch MainActivity when the notification is tapped
+                            val notificationIntent = Intent(this, MainActivity::class.java)
+
+                            // Define PendingIntent flags based on Android version
+                            val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                            } else {
+                                PendingIntent.FLAG_UPDATE_CURRENT
+                            }
+
+                            val pendingIntent = PendingIntent.getActivity(
+                                this,
+                                0,
+                                notificationIntent,
+                                pendingIntentFlags
+                            )
+
+                            return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                            .setContentTitle("Slipstream Tunnel Running")
+                            .setContentText("Tap to view configuration or stop the service.")
+                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setContentIntent(pendingIntent) // Set the intent to be triggered on click
+                            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                            .setOnlyAlertOnce(true)
+                            .build()
                         }
-                    }
-                } else if (process != null) {
-                    Log.i(TAG, "$tag process was already terminated via other means (e.g., cleanup or natural exit).")
-                }
-            }
 
-            override fun onBind(intent: Intent): IBinder? {
-                super.onBind(intent)
-                return null // We don't support binding in this simple implementation
-            }
+                        private fun sendStatusUpdate(slipstreamStatus: String? = null, sshStatus: String? = null) {
+                            val intent = Intent(ACTION_STATUS_UPDATE)
+                            slipstreamStatus?.let { intent.putExtra(EXTRA_STATUS_SLIPSTREAM, it) }
+                            sshStatus?.let { intent.putExtra(EXTRA_STATUS_SSH, it) }
+                            LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+                        }
 
-            override fun onDestroy() {
-                // Stop all background processes we started
-                stopBackgroundProcesses()
-                super.onDestroy()
-                Log.d(TAG, "Command Service destroyed.")
-            }
+                        private fun sendError(message: String, output: String) {
+                            val intent = Intent(ACTION_ERROR).apply {
+                                putExtra(EXTRA_ERROR_MESSAGE, message)
+                                putExtra(EXTRA_ERROR_OUTPUT, output)
+                            }
+                            LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+                            sendStatusUpdate(slipstreamStatus = "Failed", sshStatus = "Stopped")
+                        }
 
-            /**
-             * Stops the processes that were started by the service and held in state variables.
-             */
-            private fun stopBackgroundProcesses() {
-                Log.i(TAG, "Stopping foreground processes...")
+                        private fun copyBinaryToFilesDir(binaryName: String): String? {
+                            val destFile = File(filesDir, binaryName)
+                            if (destFile.exists()) {
+                                return destFile.absolutePath
+                            }
 
-                // 1. Send immediate stopped status to UI
-                sendStatusUpdate(slipstreamStatus = "Stopped", sshStatus = "Stopped")
+                            try {
+                                assets.open(binaryName).use { input ->
+                                    destFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                                destFile.setExecutable(true, false)
+                                Log.d(TAG, "Copied and set executable permission for: ${destFile.absolutePath}")
+                                return destFile.absolutePath
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error copying binary '$binaryName': ${e.message}", e)
+                                return null
+                            }
+                        }
 
-                // 2. Kill slipstream-client
-                killProcess(slipstreamProcess, BINARY_NAME)
-                slipstreamProcess = null
+                        private fun cleanUpLingeringProcesses() {
+                            Log.w(TAG, "Attempting to clean up lingering processes...")
+                            val pkillSlipstream = listOf("su", "-c", "pkill -9 ${BINARY_NAME}")
+                            executeCleanupCommand(pkillSlipstream, "pkill ${BINARY_NAME}")
+                        }
 
-                // 3. Kill ssh/su wrapper (relying on the stored process reference to kill only the intended tunnel)
-                killProcess(sshProcess, "ssh")
-                sshProcess = null
-            }
+                        private fun executeCleanupCommand(command: List<String>, logTag: String) {
+                            try {
+                                val process = ProcessBuilder(command)
+                                .redirectErrorStream(true)
+                                .start()
+
+                                val exited = process.waitFor(1, TimeUnit.SECONDS)
+                                if (exited) {
+                                    if (process.exitValue() != 0) {
+                                        // pkill returns 1 if no process was found, which is OK.
+                                    }
+                                } else {
+                                    process.destroyForcibly()
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error executing cleanup command $logTag: ${e.message}", e)
+                            }
+                        }
+
+                        private fun killProcess(process: Process?, tag: String) {
+                            if (process != null && process.isAlive) {
+                                process.destroy()
+                                try {
+                                    if (!process.waitFor(1000, TimeUnit.MILLISECONDS)) {
+                                        process.destroyForcibly()
+                                    }
+                                    Log.i(TAG, "$tag process successfully terminated.")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error waiting/forcing termination for $tag: ${e.message}")
+                                    if (process.isAlive) {
+                                        process.destroyForcibly()
+                                    }
+                                }
+                            }
+                        }
+
+                        override fun onBind(intent: Intent): IBinder? {
+                            super.onBind(intent)
+                            return null
+                        }
+
+                        override fun onDestroy() {
+                            // Cancel the job to stop all coroutines launched in this scope
+                            job.cancel()
+                            stopBackgroundProcesses()
+                            super.onDestroy()
+                            Log.d(TAG, "Command Service destroyed.")
+                        }
+
+                        /**
+                         * Stops all running processes and coroutines.
+                         */
+                        private fun stopBackgroundProcesses() {
+                            Log.i(TAG, "Stopping foreground processes and coroutines...")
+
+                            // 1. Cancel jobs
+                            processOutputReaderJob?.cancel()
+
+                            // 2. Kill processes
+                            killProcess(sshProcess, "ssh")
+                            killProcess(slipstreamProcess, BINARY_NAME)
+
+                            // 3. Update UI
+                            sendStatusUpdate(slipstreamStatus = "Stopped", sshStatus = "Stopped")
+
+                            slipstreamProcess = null
+                            sshProcess = null
+                            processOutputReaderJob = null
+                        }
 }
