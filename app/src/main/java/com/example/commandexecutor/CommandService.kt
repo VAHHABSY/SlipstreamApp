@@ -54,24 +54,20 @@ class CommandService : LifecycleService(), CoroutineScope {
 
                     private val tunnelMutex = Mutex()
 
-                    private var ipAddressConfig: String = ""
+                    private var resolversConfig: ArrayList<String> = arrayListOf()
                         private var domainNameConfig: String = ""
 
                             companion object {
-                                const val EXTRA_IP_ADDRESS = "ip_address"
+                                const val EXTRA_RESOLVERS = "extra_ip_addresses_list"
                                 const val EXTRA_DOMAIN = "domain_name"
-
                                 const val BINARY_NAME = "slipstream-client"
-
                                 const val ACTION_STATUS_UPDATE = "com.example.commandexecutor.STATUS_UPDATE"
                                 const val ACTION_ERROR = "com.example.commandexecutor.ERROR"
                                 const val ACTION_REQUEST_STATUS = "com.example.commandexecutor.REQUEST_STATUS"
-
                                 const val EXTRA_STATUS_SLIPSTREAM = "status_slipstream"
                                 const val EXTRA_STATUS_SSH = "status_ssh"
                                 const val EXTRA_ERROR_MESSAGE = "error_message"
                                 const val EXTRA_ERROR_OUTPUT = "error_output"
-
                                 private const val MONITOR_INTERVAL_MS = 1000L
                             }
 
@@ -98,16 +94,15 @@ class CommandService : LifecycleService(), CoroutineScope {
                                     return START_STICKY
                                 }
 
-                                // --- Original Service Starting Logic Below ---
-
-                                ipAddressConfig = intent?.getStringExtra(EXTRA_IP_ADDRESS) ?: ""
+                                resolversConfig = intent?.getStringArrayListExtra(EXTRA_RESOLVERS) ?: arrayListOf()
                                 domainNameConfig = intent?.getStringExtra(EXTRA_DOMAIN) ?: ""
-                                Log.d(TAG, "Service started. IP: $ipAddressConfig, Domain: $domainNameConfig")
+
+                                Log.d(TAG, "Service started. Resolvers: ${resolversConfig.joinToString()}, Domain: $domainNameConfig")
 
                                 startForeground(NOTIFICATION_ID, buildForegroundNotification())
 
                                 launch {
-                                    startTunnelSequence(ipAddressConfig, domainNameConfig)
+                                    startTunnelSequence(resolversConfig, domainNameConfig)
                                 }
 
                                 return START_STICKY
@@ -132,12 +127,10 @@ class CommandService : LifecycleService(), CoroutineScope {
                                 Log.e(TAG, "Status broadcasted ($logTag): Slipstream=$slipstreamStatus, SSH=$sshStatus")
                             }
 
-                            // --- Core Tunnel Logic (Unchanged from previous version) ---
-
                             /**
                              * The main execution sequence: cleans up, copies binary, and starts the tunnel.
                              */
-                            private suspend fun startTunnelSequence(ipAddress: String, domainName: String) {
+                            private suspend fun startTunnelSequence(resolvers: ArrayList<String>, domainName: String) {
                                 tunnelMutex.withLock {
 
                                     sendStatusUpdate(slipstreamStatus = "Cleaning up...", sshStatus = "Waiting...")
@@ -150,8 +143,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                                     val binaryPath = copyBinaryToFilesDir(BINARY_NAME)
                                     if (binaryPath != null) {
                                         // Execute the commands.
-                                        val success = executeCommands(binaryPath, ipAddress, domainName)
-
+                                        val success = executeCommands(binaryPath, resolvers, domainName)
                                         if (success) {
                                             // Start periodic health monitoring only if successful
                                             tunnelMonitorJob = launch { startTunnelMonitor() }
@@ -193,7 +185,8 @@ class CommandService : LifecycleService(), CoroutineScope {
                                         )
 
                                         // Attempt restart with current configuration
-                                        startTunnelSequence(ipAddressConfig, domainNameConfig)
+                                        Log.w(TAG, "Tunnel failure detected. Restarting.")
+                                        startTunnelSequence(resolversConfig, domainNameConfig)
                                     }
                                 }
                             }
@@ -201,34 +194,33 @@ class CommandService : LifecycleService(), CoroutineScope {
                             /**
                              * Executes the two shell commands: slipstream-client and ssh.
                              */
-                            private suspend fun executeCommands(
-                                slipstreamClientPath: String,
-                                ipAddress: String,
-                                domainName: String
-                            ): Boolean {
+                            private suspend fun executeCommands(slipstreamClientPath: String, resolvers: ArrayList<String>, domainName: String): Boolean {
                                 processOutputReaderJob?.cancel()
                                 processOutputReaderJob = null
 
-                                Log.i(TAG, "Starting command execution with IP: '$ipAddress' and Domain: '$domainName'")
+                                Log.i(TAG, "Starting command execution with domain: '$domainName'")
                                 sendStatusUpdate(slipstreamStatus = "Starting...", sshStatus = "Waiting...")
 
-                                val command1 = listOf(
+                                val command1 = mutableListOf(
                                     slipstreamClientPath,
                                     "--congestion-control=bbr",
-                                    "--resolver=$ipAddress:53",
                                     "--domain=$domainName"
                                 )
 
+                                // Ensure format is --resolver=IP:PORT
+                                resolvers.forEach { ip ->
+                                    val formattedIp = if (ip.contains(":")) ip else "$ip:53"
+                                    command1.add("--resolver=$formattedIp")
+                                }
+
                                 val confirmationMessage = "Connection confirmed."
-                                val slipstreamStartResult = startProcessWithOutputCheck(command1, BINARY_NAME, 2000L, confirmationMessage)
+                                val slipstreamStartResult = startProcessWithOutputCheck(command1, BINARY_NAME, 3000L, confirmationMessage)
                                 slipstreamProcess = slipstreamStartResult.second
 
-                                if (slipstreamStartResult.first.contains(confirmationMessage, ignoreCase = false)) {
-                                    Log.i(TAG, "$BINARY_NAME output confirmed successful connection. Proceeding with ssh.")
-
+                                if (slipstreamStartResult.first.contains(confirmationMessage)) {
                                     processOutputReaderJob = launch { readProcessOutput(slipstreamProcess!!, BINARY_NAME) }
                                     sendStatusUpdate(slipstreamStatus = "Running", sshStatus = "Starting...")
-                                    delay(500L)
+                                    delay(1000L)
 
                                     val sshArgs = "-p 5201 -ND 3080 root@localhost"
                                     val shellCommand = "ssh $sshArgs"
@@ -238,18 +230,15 @@ class CommandService : LifecycleService(), CoroutineScope {
                                     sshProcess = sshStartResult.second
 
                                     if (sshProcess?.isAlive == true) {
-                                        // Explicitly set both statuses to Running for definitive broadcast
                                         sendStatusUpdate(slipstreamStatus = "Running", sshStatus = "Running")
                                         return true
                                     } else {
-                                        sendError("SSH Start Error", "SSH tunnel failed to start. Output:\n${sshStartResult.first}")
+                                        sendError("SSH Start Error", "Output:\n${sshStartResult.first}")
                                         killProcess(slipstreamProcess, BINARY_NAME)
                                         return false
                                     }
                                 } else {
-                                    val errorMessage = "$BINARY_NAME failed to confirm connection or timed out."
-                                    Log.w(TAG, errorMessage)
-                                    sendError(errorMessage, slipstreamStartResult.first)
+                                    sendError("Slipstream Error", slipstreamStartResult.first)
                                     killProcess(slipstreamProcess, BINARY_NAME)
                                     return false
                                 }
