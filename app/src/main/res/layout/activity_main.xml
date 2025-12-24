@@ -126,6 +126,44 @@
                     app:layout_constraintTop_toBottomOf="@id/resolver_scroll" />
 
                 <TextView
+                    android:id="@+id/key_path_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="Private Key Configuration"
+                    android:textStyle="bold"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toBottomOf="@id/domain_input" />
+
+                <LinearLayout
+                    android:id="@+id/key_path_container"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toBottomOf="@id/key_path_label">
+
+                    <EditText
+                        android:id="@+id/key_path_input"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="Private Key Path (e.g. /sdcard/id_ed25519)"
+                        android:inputType="textUri"
+                        android:minHeight="48dp" />
+
+                    <ImageButton
+                        android:id="@+id/btn_browse_key"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:src="@android:drawable/ic_menu_search"
+                        android:contentDescription="Browse File" />
+                    </LinearLayout>
+
+                <TextView
                     android:id="@+id/status_section_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -134,7 +172,7 @@
                     android:textSize="18sp"
                     android:textStyle="italic"
                     app:layout_constraintStart_toStartOf="parent"
-                    app:layout_constraintTop_toBottomOf="@id/domain_input" />
+                    app:layout_constraintTop_toBottomOf="@id/key_path_container" />
 
                 <TextView
                     android:id="@+id/slipstream_label"
