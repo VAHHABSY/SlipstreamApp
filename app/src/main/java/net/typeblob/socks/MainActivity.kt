@@ -143,12 +143,14 @@ class MainActivity : AppCompatActivity() {
                                                                                     saveProfileData(currentProfile)
                                                                                 }
 
-                                                                                if (isChecked) checkPermissionsAndStartService()
-                                                                                    else {
-                                                                                        Utility.stopVpn(this);
-                                                                                        stopService(Intent(this, CommandService::class.java))
-                                                                                        updateStatusUI("Stopping...", "Stopping...")
-                                                                                    }
+                                                                                if (isChecked) {
+                                                                                    checkPermissionsAndStartService()
+                                                                                } else {
+                                                                                    Utility.stopVpn(this)
+                                                                                    stopService(Intent(this, CommandService::class.java))
+                                                                                    // FIX: Update UI to "Stopped" to avoid hanging on "Stopping..."
+                                                                                    updateStatusUI("Stopped", "Stopped")
+                                                                                }
                                                                         }
 
                                                                         val filter = IntentFilter().apply {
