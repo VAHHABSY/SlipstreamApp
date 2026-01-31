@@ -20,11 +20,6 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-    
-    - name: Setup Gradle
-      uses: gradle/gradle-build-action@v2
-      with:
-        gradle-version: 8.2.0
         
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
@@ -40,12 +35,16 @@ jobs:
         ${ANDROID_NDK_HOME}/ndk-build APP_ABI=arm64-v8a,armeabi-v7a,x86,x86_64
         cd ../../../..
         
-    - name: Build Debug APK
-      run: gradle assembleDebug --stacktrace
-      
-    - name: Build Release APK
-      run: gradle assembleRelease --stacktrace
-      
+    - name: Build Debug APK with Gradle Action
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: assembleDebug --stacktrace
+        
+    - name: Build Release APK with Gradle Action
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: assembleRelease --stacktrace
+        
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
       with:
@@ -57,15 +56,3 @@ jobs:
       with:
         name: app-release
         path: app/build/outputs/apk/release/app-release-unsigned.apk
-        
-    - name: Create Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v1.0-${{ github.run_number }}
-        name: SlipstreamApp Build ${{ github.run_number }}
-        files: |
-          app/build/outputs/apk/debug/app-debug.apk
-          app/build/outputs/apk/release/app-release-unsigned.apk
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
