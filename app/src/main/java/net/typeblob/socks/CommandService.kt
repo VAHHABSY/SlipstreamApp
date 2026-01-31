@@ -135,7 +135,7 @@ class CommandService : LifecycleService(), CoroutineScope {
 
                 if (slipstreamPath != null && proxyPath != null) {
                     // Fix Private Key Permissions (Critical for SSH/Proxy clients)
-                    if (privateKeyPath.isNotEmpty()) {
+                    if (privateKeyPath.isNotEmpty() && File(privateKeyPath).exists()) {
                         try {
                             Runtime.getRuntime()
                                     .exec(arrayOf("chmod", "600", privateKeyPath))
@@ -143,6 +143,10 @@ class CommandService : LifecycleService(), CoroutineScope {
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to chmod key: ${e.message}")
                         }
+                    } else if (privateKeyPath.isEmpty()) {
+                        Log.w(TAG, "No private key provided. SSH features will not work.")
+                    } else {
+                        Log.w(TAG, "Private key path provided but file not found: $privateKeyPath")
                     }
 
                     val success = executeCommands(slipstreamPath, proxyPath, resolvers, domainName)
@@ -224,7 +228,12 @@ class CommandService : LifecycleService(), CoroutineScope {
                 return true
             } else {
                 Log.e(TAG, "Proxy client died immediately after start.")
-                sendErrorMessage("Proxy Client failed to start. Check key permissions.")
+                val errorMsg = if (privateKeyPath.isEmpty() || !File(privateKeyPath).exists()) {
+                    "Proxy Client failed: No valid SSH key provided. SSH features require a key file."
+                } else {
+                    "Proxy Client failed to start. Check key permissions."
+                }
+                sendErrorMessage(errorMsg)
             }
         } else {
             sendErrorMessage("Slipstream failed: ${slipResult.first}")

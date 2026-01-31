@@ -150,7 +150,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:hint="Private Key Path (e.g. /sdcard/id_ed25519)"
+                        android:hint="Private Key Path (Optional - for SSH features)"
                         android:inputType="textUri"
                         android:minHeight="48dp" />
 
