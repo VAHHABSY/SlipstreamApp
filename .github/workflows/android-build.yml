@@ -38,13 +38,13 @@ jobs:
     - name: Build Debug APK
       uses: gradle/gradle-build-action@v2
       with:
-        gradle-version: 8.2.0
+        gradle-version: 8.2
         arguments: assembleDebug --stacktrace
         
     - name: Build Release APK
       uses: gradle/gradle-build-action@v2
       with:
-        gradle-version: 8.2.0
+        gradle-version: 8.2
         arguments: assembleRelease --stacktrace
         
     - name: Upload Debug APK
