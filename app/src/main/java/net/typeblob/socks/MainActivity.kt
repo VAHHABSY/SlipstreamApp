@@ -419,9 +419,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Make key file optional - warn but don't block
-        if (keyPath.isBlank() || !File(keyPath).exists()) {
-            Toast.makeText(this, "Warning: No key file selected. Some features may not work.", Toast.LENGTH_LONG).show()
-            // Continue anyway with empty or default keyPath
+        if (keyPath.isBlank()) {
+            Toast.makeText(this, "Warning: No key file selected. SSH features will not work.", Toast.LENGTH_LONG).show()
+            // Continue anyway with empty keyPath
+        } else if (!File(keyPath).exists()) {
+            Toast.makeText(this, "Warning: Key file not found. SSH features will not work.", Toast.LENGTH_LONG).show()
+            // Continue anyway
         }
 
         val vpnPrepareIntent = VpnService.prepare(this)

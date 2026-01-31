@@ -70,9 +70,9 @@ docker run -v $(pwd)/../../../:/workspace slipstream-ndk
 
 ## Prerequisites
 
-1.  **External Server (SSH Endpoint):** A server accessible via SSH acting as the remote end of the tunnel. **(Optional - only required for SSH-based features)**
+### Required
     
-2.  **Binaries:** The following binaries must be present in the project's `assets` or `jni` folders:
+1.  **Binaries:** The following binaries must be present in the project's `assets` or `jni` folders:
     
     -   `slipstream-client`
         
@@ -80,29 +80,33 @@ docker run -v $(pwd)/../../../:/workspace slipstream-ndk
         
     -   `pdnsd` and `tun2socks` (Compiled via NDK)
         
-3.  **Network Configuration:** Remote server IP and the domain name configured for your Slipstream DNS service.
+2.  **Network Configuration:** Remote server IP and the domain name configured for your Slipstream DNS service.
+
+### Optional (For SSH Features)
+
+-  **External Server (SSH Endpoint):** A server accessible via SSH acting as the remote end of the tunnel. Only required if you want to use SSH-based tunneling features.
     
 
 ## Setup Instructions
 
-The connection uses **SSH Public Key Authentication** to secure the tunnel between the `ssh-client` and your remote server.
+The connection can optionally use **SSH Public Key Authentication** to secure the tunnel between the `ssh-client` and your remote server.
 
 **Note:** The SSH key is **optional**. The app can be started without a key file for testing or if you're using alternative authentication methods. However, full SSH tunnel functionality requires a valid key.
 
-### 1. Generate SSH Key Pair (Recommended: Ed25519) - Optional
+### Generate SSH Key Pair (Optional - for SSH features)
 
-Generate a key pair on your machine if you plan to use SSH features:
+If you plan to use SSH features, generate a key pair on your machine (Recommended: Ed25519):
 
 ```
 ssh-keygen -t ed25519 -f id_slipstream -N ""
 
 ```
 
-### 2. Server-Side Configuration - Optional
+### Server-Side Configuration (Optional - for SSH features)
 
 Copy the contents of `id_slipstream.pub` and append it to the `/root/.ssh/authorized_keys` file on your **remote SSH server**.
 
-### 3. App Configuration
+### App Configuration
 
 1.  **Key Placement (Optional):** If you want to use SSH features, place your private key (`id_slipstream`) in the application's internal storage directory and choose via file picker. If no key is provided, the app will still start but SSH-based features will not work.
     
