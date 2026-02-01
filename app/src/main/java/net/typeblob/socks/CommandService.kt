@@ -51,7 +51,7 @@ class CommandService : LifecycleService(), CoroutineScope {
         const val EXTRA_RESOLVERS = "extra_ip_addresses_list"
         const val EXTRA_DOMAIN = "domain_name"
         const val EXTRA_SOCKS5_PORT = "socks5_port"
-        const val SLIPSTREAM_BINARY_NAME = "slipstream-client"
+        const val SLIPSTREAM_BINARY_NAME = "libslipstream.so"
         const val ACTION_STATUS_UPDATE = "net.typeblob.socks.STATUS_UPDATE"
         const val ACTION_ERROR = "net.typeblob.socks.ERROR"
         const val ACTION_REQUEST_STATUS = "net.typeblob.socks.REQUEST_STATUS"
@@ -129,52 +129,39 @@ class CommandService : LifecycleService(), CoroutineScope {
                 }
 
                 try {
-                    broadcastLog("Step 1: Copying binary to cache dir")
-                    val slipstreamPath = copyBinaryToCacheDir(SLIPSTREAM_BINARY_NAME)
-
-                    if (slipstreamPath == null) {
-                        handleError("Binary setup failed", "Could not copy slipstream binary")
+                    // Use the native library directory where Android allows execution
+                    val nativeLibDir = applicationInfo.nativeLibraryDir
+                    val slipstreamPath = File(nativeLibDir, SLIPSTREAM_BINARY_NAME).absolutePath
+                    
+                    broadcastLog("Step 1: Native lib dir: $nativeLibDir")
+                    broadcastLog("Step 2: Looking for binary: $slipstreamPath")
+                    
+                    val slipstreamFile = File(slipstreamPath)
+                    
+                    if (!slipstreamFile.exists()) {
+                        broadcastLog("Binary not found in native lib dir!", isError = true)
+                        broadcastLog("Please move binary to app/src/main/jniLibs/arm64-v8a/libslipstream.so", isError = true)
+                        handleError("Binary not found", "Rebuild APK with binary in jniLibs folder")
                         return
                     }
-
-                    broadcastLog("Step 2: Binary at: $slipstreamPath")
-                    val slipstreamFile = File(slipstreamPath)
                     
                     broadcastLog("Step 3: Binary exists: ${slipstreamFile.exists()}")
                     broadcastLog("Step 4: Binary size: ${slipstreamFile.length()} bytes")
                     broadcastLog("Step 5: Binary executable: ${slipstreamFile.canExecute()}")
-                    
-                    if (!slipstreamFile.canExecute()) {
-                        broadcastLog("Binary not executable, setting permissions...", isError = true)
-                        try {
-                            val chmodProcess = Runtime.getRuntime().exec("chmod 755 $slipstreamPath")
-                            val exitCode = chmodProcess.waitFor()
-                            broadcastLog("chmod exit code: $exitCode")
-                        } catch (e: Exception) {
-                            broadcastLog("chmod failed: ${e.message}", isError = true)
-                        }
-                    }
-
-                    broadcastLog("Step 6: After chmod - executable: ${slipstreamFile.canExecute()}")
-
-                    if (!slipstreamFile.canExecute()) {
-                        handleError("Permission Error", "Cannot execute binary at $slipstreamPath")
-                        return
-                    }
 
                     val commandList = mutableListOf(slipstreamPath, domainNameConfig)
                     resolversConfig.forEach { commandList.add(it) }
                     commandList.add("--socks-port")
                     commandList.add(socks5Port)
 
-                    broadcastLog("Step 7: Command: ${commandList.joinToString(" ")}")
-                    broadcastLog("Step 8: Starting process from cache dir...")
+                    broadcastLog("Step 6: Command: ${commandList.joinToString(" ")}")
+                    broadcastLog("Step 7: Starting process from native lib dir...")
 
                     slipstreamProcess = ProcessBuilder(commandList)
                             .redirectErrorStream(true)
                             .start()
 
-                    broadcastLog("Step 9: Process started, alive: ${slipstreamProcess?.isAlive}")
+                    broadcastLog("Step 8: Process started, alive: ${slipstreamProcess?.isAlive}")
 
                     slipstreamReaderJob =
                             launch {
@@ -209,7 +196,7 @@ class CommandService : LifecycleService(), CoroutineScope {
 
                     delay(1500)
                     val isAliveAfterDelay = slipstreamProcess?.isAlive ?: false
-                    broadcastLog("Step 10: After delay, alive: $isAliveAfterDelay")
+                    broadcastLog("Step 9: After delay, alive: $isAliveAfterDelay")
                     
                     if (!isAliveAfterDelay) {
                         val exitValue = try {
@@ -223,7 +210,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                     }
 
                     sendStatusUpdate("Running", "Running on port $socks5Port")
-                    broadcastLog("Step 11: Starting monitoring")
+                    broadcastLog("Step 10: Starting monitoring")
                     startMonitoring()
                 } catch (e: Exception) {
                     broadcastLog("Error: ${e.javaClass.simpleName}: ${e.message}", isError = true)
@@ -347,85 +334,10 @@ class CommandService : LifecycleService(), CoroutineScope {
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 
-    private fun copyBinaryToCacheDir(name: String): String? {
-        // Use cacheDir instead of filesDir - cacheDir doesn't have noexec mount option
-        val file = File(cacheDir, name)
-        return try {
-            // Always recopy to ensure fresh binary with correct permissions
-            if (file.exists()) {
-                broadcastLog("Deleting existing binary in cache...")
-                file.delete()
-            }
-            
-            broadcastLog("Copying binary from assets to cache dir...")
-            assets.open(name).use { input ->
-                file.outputStream().use { output -> 
-                    val bytes = input.copyTo(output)
-                    broadcastLog("Copied $bytes bytes from assets")
-                }
-            }
-            
-            broadcastLog("Setting executable permissions...")
-            
-            // Set permissions using Java API
-            file.setExecutable(true, false)
-            file.setReadable(true, false)
-            file.setWritable(true, true)
-            
-            // Also try chmod as backup
-            try {
-                val chmodProcess = Runtime.getRuntime().exec(arrayOf("chmod", "755", file.absolutePath))
-                val exitCode = chmodProcess.waitFor()
-                broadcastLog("chmod exit: $exitCode")
-                
-                // Read chmod output if any
-                val output = chmodProcess.inputStream.bufferedReader().readText()
-                if (output.isNotEmpty()) {
-                    broadcastLog("chmod output: $output")
-                }
-                val error = chmodProcess.errorStream.bufferedReader().readText()
-                if (error.isNotEmpty()) {
-                    broadcastLog("chmod error: $error", isError = true)
-                }
-            } catch (e: Exception) {
-                broadcastLog("chmod failed: ${e.message}", isError = true)
-            }
-            
-            // Verify file permissions
-            if (file.canExecute()) {
-                broadcastLog("$name is executable ✓")
-            } else {
-                broadcastLog("$name NOT executable ✗", isError = true)
-                
-                // Try one more time with absolute chmod path
-                try {
-                    broadcastLog("Trying /system/bin/chmod...")
-                    val chmodProcess2 = Runtime.getRuntime().exec(arrayOf("/system/bin/chmod", "777", file.absolutePath))
-                    val exitCode2 = chmodProcess2.waitFor()
-                    broadcastLog("chmod777 exit: $exitCode2")
-                    
-                    if (file.canExecute()) {
-                        broadcastLog("Success after chmod 777 ✓")
-                    } else {
-                        broadcastLog("Still not executable after chmod 777 ✗", isError = true)
-                    }
-                } catch (e2: Exception) {
-                    broadcastLog("chmod 777 failed: ${e2.message}", isError = true)
-                }
-            }
-            
-            file.absolutePath
-        } catch (e: Exception) {
-            broadcastLog("Copy failed: ${e.message}", isError = true)
-            e.printStackTrace()
-            null
-        }
-    }
-
     private fun cleanUpLingeringProcesses() {
         try {
             broadcastLog("Cleaning up old processes...")
-            val killProcess = Runtime.getRuntime().exec(arrayOf("killall", "-9", SLIPSTREAM_BINARY_NAME))
+            val killProcess = Runtime.getRuntime().exec(arrayOf("killall", "-9", "libslipstream.so"))
             val exitCode = killProcess.waitFor()
             broadcastLog("Cleanup exit: $exitCode")
         } catch (e: Exception) {

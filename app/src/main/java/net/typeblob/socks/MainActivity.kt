@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -21,7 +20,6 @@ import java.text.SimpleDateFormat
 import java.util.ArrayList
 import java.util.Date
 import java.util.Locale
-import net.typeblob.socks.socks.util.Utility
 
 class MainActivity : AppCompatActivity() {
 
@@ -141,7 +139,7 @@ class MainActivity : AppCompatActivity() {
 
         setupProfiles()
         
-        addLog("SlipstreamApp started - SOCKS5 mode")
+        addLog("SlipstreamApp started - SOCKS5 mode (No VPN)")
 
         addResolverButton.setOnClickListener { addResolverInput("", true) }
         addProfileButton.setOnClickListener { showAddProfileDialog() }
@@ -156,11 +154,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (isChecked) {
-                addLog("Starting VPN service...")
+                addLog("Starting SOCKS5 proxy service...")
                 checkPermissionsAndStartService()
             } else {
-                addLog("Stopping VPN service...")
-                Utility.stopVpn(this)
+                addLog("Stopping SOCKS5 proxy service...")
                 stopService(Intent(this, CommandService::class.java))
                 updateStatusUI("Stopped", "Stopped")
             }
@@ -430,36 +427,6 @@ class MainActivity : AppCompatActivity() {
 
         addLog("Starting - Domain: $domainName, Resolvers: ${ipList.joinToString(",")}, Port: $socks5Port")
 
-        val vpnPrepareIntent = VpnService.prepare(this)
-        if (vpnPrepareIntent != null) {
-            addLog("Requesting VPN permission...")
-            startActivityForResult(vpnPrepareIntent, 0)
-        } else {
-            proceedWithStart(ipList, domainName, socks5Port, ipList[0])
-        }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode == RESULT_OK) {
-            val ipList = getIpListFromUI()
-            val domainName = domainInput.text.toString().trim()
-            val socks5Port = socks5PortInput.text.toString().trim()
-            addLog("VPN permission granted")
-            proceedWithStart(ipList, domainName, socks5Port, getIpListFromUI()[0])
-        } else {
-            Toast.makeText(this, "VPN permission denied", Toast.LENGTH_SHORT).show()
-            syncSwitchState(false)
-            addLog("VPN permission denied", isError = true)
-        }
-    }
-
-    private fun proceedWithStart(
-            ipList: ArrayList<String>,
-            domainName: String,
-            socks5Port: String,
-            dns: String
-    ) {
         val serviceIntent =
                 Intent(this, CommandService::class.java).apply {
                     putStringArrayListExtra(CommandService.EXTRA_RESOLVERS, ipList)
@@ -467,9 +434,8 @@ class MainActivity : AppCompatActivity() {
                     putExtra(CommandService.EXTRA_SOCKS5_PORT, socks5Port)
                 }
         ContextCompat.startForegroundService(this, serviceIntent)
-        Utility.startVpn(this, dns)
         updateStatusUI("Starting...", "Waiting...")
-        addLog("VPN started - DNS: $dns, SOCKS5: $socks5Port")
+        addLog("SOCKS5 proxy service started on port $socks5Port")
     }
 
     private fun updateStatusUI(slipstreamStatus: String? = null, socksStatus: String? = null) {
