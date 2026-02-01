@@ -499,6 +499,7 @@ fun SlipstreamStatus.toDisplayString(): String = when (this) {
     is SlipstreamStatus.Running -> "Running"
     is SlipstreamStatus.Stopping -> "Stopping..."
     is SlipstreamStatus.Failed -> message
+    else -> "Unknown"
 }
 
 fun SlipstreamStatus.toColor(): Color = when (this) {
@@ -507,6 +508,7 @@ fun SlipstreamStatus.toColor(): Color = when (this) {
     is SlipstreamStatus.Running -> Color(0xFF66BB6A)
     is SlipstreamStatus.Stopping -> Color(0xFFFFA726)
     is SlipstreamStatus.Failed -> Color(0xFFEF5350)
+    else -> Color(0xFF757575)
 }
 
 fun SocksStatus.toDisplayString(): String = when (this) {
@@ -514,6 +516,7 @@ fun SocksStatus.toDisplayString(): String = when (this) {
     is SocksStatus.Waiting -> "Waiting..."
     is SocksStatus.Running -> "Running"
     is SocksStatus.Stopping -> "Stopping..."
+    else -> "Unknown"
 }
 
 fun SocksStatus.toColor(): Color = when (this) {
@@ -521,4 +524,5 @@ fun SocksStatus.toColor(): Color = when (this) {
     is SocksStatus.Waiting -> Color(0xFFFFA726)
     is SocksStatus.Running -> Color(0xFF66BB6A)
     is SocksStatus.Stopping -> Color(0xFFFFA726)
+    else -> Color(0xFF757575)
 }
