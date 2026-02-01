@@ -13,17 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
+    strategy:
+      matrix:
+        target:
+          - triple: aarch64-linux-android
+            abi: arm64-v8a
+            api: 33
+          - triple: armv7-linux-androideabi
+            abi: armeabi-v7a
+            api: 33
+          - triple: x86_64-linux-android
+            abi: x86_64
+            api: 33
+          - triple: i686-linux-android
+            abi: x86
+            api: 33
+
     steps:
       - name: Checkout your SlipstreamApp repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-
-      - name: Verify repository structure
-        run: |
-          mkdir -p app/src/main/jniLibs
-          echo "✓ Directory structure verified"
 
       - name: Checkout slipstream-plugin-android
         uses: actions/checkout@v4
@@ -41,83 +52,110 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
+          targets: ${{ matrix.target.triple }}
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 perl pkg-config
+          sudo apt-get install -y cmake ninja-build python3 perl pkg-config libssl-dev
 
-      - name: Set environment variables
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            slipstream-plugin-android/app/src/main/rust/slipstream-rust/target
+          key: ${{ runner.os }}-cargo-${{ matrix.target.triple }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Set build environment for ${{ matrix.target.abi }}
         run: |
+          # Set NDK paths
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          
+          # Set target-specific linker
+          TARGET_UPPER=$(echo "${{ matrix.target.triple }}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+          
+          echo "CARGO_TARGET_${TARGET_UPPER}_LINKER=${NDK_TOOLCHAIN}/bin/${{ matrix.target.triple }}${{ matrix.target.api }}-clang" >> $GITHUB_ENV
+          echo "CC_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/${{ matrix.target.triple }}${{ matrix.target.api }}-clang" >> $GITHUB_ENV
+          echo "CXX_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/${{ matrix.target.triple }}${{ matrix.target.api }}-clang++" >> $GITHUB_ENV
+          echo "AR_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> $GITHUB_ENV
+          
+          # Set environment for picoquic/CMake builds
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
-          echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang" >> $GITHUB_ENV
-          echo "CARGO_TARGET_I686_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang" >> $GITHUB_ENV
-          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang" >> $GITHUB_ENV
-          echo "CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
-          echo "CC_armv7_linux_androideabi=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang" >> $GITHUB_ENV
-          echo "CC_i686_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang" >> $GITHUB_ENV
-          echo "CC_x86_64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang" >> $GITHUB_ENV
-          echo "AR=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
-          echo "RANLIB=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "ANDROID_ABI=${{ matrix.target.abi }}" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=android-${{ matrix.target.api }}" >> $GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
+          
+          # For OpenSSL vendored build
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
 
-      - name: Build for ARM64
+      - name: Build slipstream-client for ${{ matrix.target.abi }}
         working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
         run: |
-          echo "=== Building for aarch64-linux-android ==="
-          cargo build --release --target aarch64-linux-android \
+          echo "=== Building for ${{ matrix.target.triple }} (${{ matrix.target.abi }}) ==="
+          
+          cargo build \
+            --release \
+            --target ${{ matrix.target.triple }} \
             --bin slipstream-client \
-            --features openssl-vendored,picoquic-minimal-build
+            --features openssl-vendored,picoquic-minimal-build \
+            -vv
 
-      - name: Build for ARMv7
+      - name: Verify binary
         working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
         run: |
-          echo "=== Building for armv7-linux-androideabi ==="
-          cargo build --release --target armv7-linux-androideabi \
-            --bin slipstream-client \
-            --features openssl-vendored,picoquic-minimal-build
+          BINARY="target/${{ matrix.target.triple }}/release/slipstream-client"
+          
+          if [ ! -f "$BINARY" ]; then
+            echo "❌ Binary not found: $BINARY"
+            exit 1
+          fi
+          
+          echo "✓ Binary built successfully"
+          ls -lh "$BINARY"
+          file "$BINARY"
 
-      - name: Build for x86_64
-        working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
-        run: |
-          echo "=== Building for x86_64-linux-android ==="
-          cargo build --release --target x86_64-linux-android \
-            --bin slipstream-client \
-            --features openssl-vendored,picoquic-minimal-build
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slipstream-${{ matrix.target.abi }}
+          path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${{ matrix.target.triple }}/release/slipstream-client
+          retention-days: 1
 
-      - name: Build for x86
-        working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
-        run: |
-          echo "=== Building for i686-linux-android ==="
-          cargo build --release --target i686-linux-android \
-            --bin slipstream-client \
-            --features openssl-vendored,picoquic-minimal-build
+  package-and-commit:
+    name: Package and Commit Binaries
+    needs: build-slipstream
+    runs-on: ubuntu-latest
 
-      - name: Verify binaries
-        working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
-        run: |
-          echo "=== Verifying binaries ==="
-          ls -lh target/aarch64-linux-android/release/slipstream-client
-          ls -lh target/armv7-linux-androideabi/release/slipstream-client
-          ls -lh target/x86_64-linux-android/release/slipstream-client
-          ls -lh target/i686-linux-android/release/slipstream-client
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Copy binaries to jniLibs
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Setup Android NDK (for strip tool)
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26c
+          add-to-path: true
+
+      - name: Organize binaries into jniLibs
         run: |
           mkdir -p app/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64,x86}
           
-          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/aarch64-linux-android/release/slipstream-client \
-             app/src/main/jniLibs/arm64-v8a/libslipstream.so
-          
-          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/armv7-linux-androideabi/release/slipstream-client \
-             app/src/main/jniLibs/armeabi-v7a/libslipstream.so
-          
-          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/x86_64-linux-android/release/slipstream-client \
-             app/src/main/jniLibs/x86_64/libslipstream.so
-          
-          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/i686-linux-android/release/slipstream-client \
-             app/src/main/jniLibs/x86/libslipstream.so
+          # Copy and rename binaries
+          cp binaries/slipstream-arm64-v8a/slipstream-client app/src/main/jniLibs/arm64-v8a/libslipstream.so
+          cp binaries/slipstream-armeabi-v7a/slipstream-client app/src/main/jniLibs/armeabi-v7a/libslipstream.so
+          cp binaries/slipstream-x86_64/slipstream-client app/src/main/jniLibs/x86_64/libslipstream.so
+          cp binaries/slipstream-x86/slipstream-client app/src/main/jniLibs/x86/libslipstream.so
           
           echo "✓ All binaries copied"
 
@@ -127,9 +165,26 @@ jobs:
           
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do
             if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
+              SIZE_BEFORE=$(stat -c%s "app/src/main/jniLibs/${abi}/libslipstream.so")
               "$STRIP" "app/src/main/jniLibs/${abi}/libslipstream.so"
-              echo "✓ Stripped ${abi}"
+              SIZE_AFTER=$(stat -c%s "app/src/main/jniLibs/${abi}/libslipstream.so")
+              
+              echo "✓ Stripped ${abi}: $(numfmt --to=iec $SIZE_BEFORE) → $(numfmt --to=iec $SIZE_AFTER)"
+            fi
+          done
+
+      - name: Verify all binaries
+        run: |
+          echo "=== Final Binaries ==="
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
+              echo ""
+              echo "${abi}:"
               ls -lh "app/src/main/jniLibs/${abi}/libslipstream.so"
+              file "app/src/main/jniLibs/${abi}/libslipstream.so"
+            else
+              echo "❌ Missing: ${abi}"
+              exit 1
             fi
           done
 
@@ -140,6 +195,11 @@ jobs:
           
           Built from: https://github.com/Mygod/slipstream-plugin-android
           
+          ## Installation
+          
+          These files are in the correct directory structure for Android Studio.
+          Simply commit this folder and rebuild your app.
+          
           ## Binary Sizes
           
           EOF
@@ -147,7 +207,8 @@ jobs:
           ls -lh app/src/main/jniLibs/*/*.so >> app/src/main/jniLibs/README.md
           echo '```' >> app/src/main/jniLibs/README.md
           echo "" >> app/src/main/jniLibs/README.md
-          echo "Built on: $(date -u)" >> app/src/main/jniLibs/README.md
+          echo "Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> app/src/main/jniLibs/README.md
+          echo "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> app/src/main/jniLibs/README.md
 
       - name: Commit and push binaries
         run: |
@@ -162,16 +223,27 @@ jobs:
             git commit -m "🤖 Update slipstream Android binaries
 
           Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          Binary sizes:
+          $(ls -lh app/src/main/jniLibs/*/*.so | awk '{print "- " $9 ": " $5}')"
             
             git push
             echo "✓ Binaries committed and pushed"
           fi
 
-      - name: Upload artifacts
-        if: always()
+      - name: Create ZIP archive
+        run: |
+          cd app/src/main
+          zip -r ../../../slipstream-android-jniLibs.zip jniLibs/
+          cd ../../..
+          sha256sum slipstream-android-jniLibs.zip > slipstream-android-jniLibs.zip.sha256
+
+      - name: Upload final package
         uses: actions/upload-artifact@v4
         with:
-          name: slipstream-android-binaries
-          path: app/src/main/jniLibs/
-          if-no-files-found: warn
+          name: slipstream-android-jniLibs
+          path: |
+            slipstream-android-jniLibs.zip
+            slipstream-android-jniLibs.zip.sha256
+          retention-days: 90
