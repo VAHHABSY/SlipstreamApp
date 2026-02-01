@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.text.InputType
+import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
@@ -20,7 +21,10 @@ import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
 import java.util.ArrayList
+import java.util.Date
+import java.util.Locale
 import net.typeblob.socks.socks.util.Utility
 
 class MainActivity : AppCompatActivity() {
@@ -39,6 +43,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var slipstreamStatusText: TextView
     private lateinit var sshStatusIndicator: TextView
     private lateinit var sshStatusText: TextView
+    
+    // Log section
+    private lateinit var logTextView: TextView
+    private lateinit var clearLogButton: Button
+    private val logBuilder = StringBuilder()
+    private val maxLogLines = 100
 
     private lateinit var sharedPreferences: SharedPreferences
     private var isUpdatingSwitch = false
@@ -62,6 +72,7 @@ class MainActivity : AppCompatActivity() {
                                     intent.getStringExtra(CommandService.EXTRA_STATUS_SLIPSTREAM)
                             val sshStatus = intent.getStringExtra(CommandService.EXTRA_STATUS_SSH)
                             updateStatusUI(slipstreamStatus, sshStatus)
+                            addLog("Status Update - Slipstream: $slipstreamStatus, SSH: $sshStatus")
                         }
                         CommandService.ACTION_ERROR -> {
                             val message =
@@ -73,6 +84,7 @@ class MainActivity : AppCompatActivity() {
                                     slipstreamStatus = "Failed: $message",
                                     sshStatus = "Stopped"
                             )
+                            addLog("ERROR: $message", isError = true)
                         }
                     }
                 }
@@ -82,6 +94,7 @@ class MainActivity : AppCompatActivity() {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
                 if (isGranted) {
                     openFilePicker()
+                    addLog("Storage permission granted")
                 } else {
                     Toast.makeText(
                                     this,
@@ -89,13 +102,19 @@ class MainActivity : AppCompatActivity() {
                                     Toast.LENGTH_SHORT
                             )
                             .show()
+                    addLog("Storage permission denied", isError = true)
                 }
             }
 
     private val requestNotificationPermissionLauncher =
             registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                if (isGranted && tunnelSwitch.isChecked) startCommandService()
-                else if (!isGranted) syncSwitchState(false)
+                if (isGranted && tunnelSwitch.isChecked) {
+                    startCommandService()
+                    addLog("Notification permission granted")
+                } else if (!isGranted) {
+                    syncSwitchState(false)
+                    addLog("Notification permission denied", isError = true)
+                }
             }
 
     private val pickKeyFileLauncher =
@@ -106,8 +125,10 @@ class MainActivity : AppCompatActivity() {
                         keyPathInput.setText(localPath)
                         saveCurrentProfileData()
                         Toast.makeText(this, "Key imported successfully", Toast.LENGTH_SHORT).show()
+                        addLog("Key imported: $localPath")
                     } else {
                         Toast.makeText(this, "Failed to import key", Toast.LENGTH_SHORT).show()
+                        addLog("Failed to import key", isError = true)
                     }
                 }
             }
@@ -132,8 +153,19 @@ class MainActivity : AppCompatActivity() {
         slipstreamStatusText = findViewById(R.id.slipstream_status_text)
         sshStatusIndicator = findViewById(R.id.ssh_status_indicator)
         sshStatusText = findViewById(R.id.ssh_status_text)
+        
+        // Initialize log section
+        logTextView = findViewById(R.id.log_text_view)
+        clearLogButton = findViewById(R.id.clear_log_button)
+        
+        logTextView.movementMethod = ScrollingMovementMethod()
+        clearLogButton.setOnClickListener { 
+            clearLog()
+        }
 
         setupProfiles()
+        
+        addLog("SlipstreamApp started")
 
         addResolverButton.setOnClickListener { addResolverInput("", true) }
         addProfileButton.setOnClickListener { showAddProfileDialog() }
@@ -150,11 +182,12 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (isChecked) {
+                addLog("Starting VPN service...")
                 checkPermissionsAndStartService()
             } else {
+                addLog("Stopping VPN service...")
                 Utility.stopVpn(this)
                 stopService(Intent(this, CommandService::class.java))
-                // FIX: Update UI to "Stopped" to avoid hanging on "Stopping..."
                 updateStatusUI("Stopped", "Stopped")
             }
         }
@@ -165,6 +198,36 @@ class MainActivity : AppCompatActivity() {
                     addAction(CommandService.ACTION_ERROR)
                 }
         LocalBroadcastManager.getInstance(this).registerReceiver(statusReceiver, filter)
+    }
+    
+    private fun addLog(message: String, isError: Boolean = false) {
+        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val prefix = if (isError) "❌" else "ℹ️"
+        val logLine = "[$timestamp] $prefix $message\n"
+        
+        logBuilder.append(logLine)
+        
+        // Keep only last maxLogLines
+        val lines = logBuilder.lines()
+        if (lines.size > maxLogLines) {
+            logBuilder.clear()
+            logBuilder.append(lines.takeLast(maxLogLines).joinToString("\n"))
+        }
+        
+        runOnUiThread {
+            logTextView.text = logBuilder.toString()
+            // Auto-scroll to bottom
+            val scrollAmount = logTextView.layout?.getLineTop(logTextView.lineCount) ?: 0
+            if (scrollAmount > logTextView.height) {
+                logTextView.scrollTo(0, scrollAmount - logTextView.height)
+            }
+        }
+    }
+    
+    private fun clearLog() {
+        logBuilder.clear()
+        logTextView.text = ""
+        addLog("Log cleared")
     }
 
     private fun copyUriToInternalStorage(uri: Uri): String? {
@@ -178,6 +241,7 @@ class MainActivity : AppCompatActivity() {
             destinationFile.absolutePath
         } catch (e: Exception) {
             e.printStackTrace()
+            addLog("Copy error: ${e.message}", isError = true)
             null
         }
     }
@@ -211,6 +275,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openFilePicker() {
         pickKeyFileLauncher.launch(arrayOf("*/*"))
+        addLog("Opening file picker for SSH key")
     }
 
     private fun checkPermissionsAndStartService() {
@@ -262,6 +327,7 @@ class MainActivity : AppCompatActivity() {
                                 .edit()
                                 .putString(PREF_LAST_PROFILE, profileList[position])
                                 .apply()
+                        addLog("Switched to profile: ${profileList[position]}")
                     }
                     override fun onNothingSelected(parent: AdapterView<*>?) {}
                 }
@@ -282,6 +348,7 @@ class MainActivity : AppCompatActivity() {
 
         ipList.forEachIndexed { index, ip -> addResolverInput(ip, index > 0) }
         isSwitchingProfile = false
+        addLog("Loaded profile: $profileName")
     }
 
     private fun saveProfileData(profileName: String) {
@@ -327,6 +394,7 @@ class MainActivity : AppCompatActivity() {
                         profileSpinner.setSelection(newIndex)
                         lastSelectedPosition = newIndex
                         loadProfileData(name)
+                        addLog("Created new profile: $name")
                     }
                 }
                 .setNegativeButton("Cancel", null)
@@ -349,6 +417,7 @@ class MainActivity : AppCompatActivity() {
                     lastSelectedPosition = 0
                     profileSpinner.setSelection(0)
                     loadProfileData(profileList[0])
+                    addLog("Deleted profile: $currentProfile")
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
@@ -415,20 +484,26 @@ class MainActivity : AppCompatActivity() {
         if (ipList.isEmpty() || domainName.isBlank()) {
             Toast.makeText(this, "Configuration missing", Toast.LENGTH_SHORT).show()
             syncSwitchState(false)
+            addLog("Configuration missing - Resolvers: ${ipList.size}, Domain: ${domainName.isNotBlank()}", isError = true)
             return
         }
+
+        addLog("Starting service - Domain: $domainName, Resolvers: ${ipList.joinToString(", ")}")
 
         // Make key file optional - warn but don't block
         if (keyPath.isBlank()) {
             Toast.makeText(this, "Warning: No key file selected. SSH features will not work.", Toast.LENGTH_LONG).show()
-            // Continue anyway with empty keyPath
+            addLog("Warning: No SSH key file selected", isError = false)
         } else if (!File(keyPath).exists()) {
             Toast.makeText(this, "Warning: Key file not found. SSH features will not work.", Toast.LENGTH_LONG).show()
-            // Continue anyway
+            addLog("Warning: SSH key file not found at: $keyPath", isError = false)
+        } else {
+            addLog("Using SSH key: $keyPath")
         }
 
         val vpnPrepareIntent = VpnService.prepare(this)
         if (vpnPrepareIntent != null) {
+            addLog("Requesting VPN permission...")
             startActivityForResult(vpnPrepareIntent, 0)
         } else {
             proceedWithStart(ipList, domainName, keyPath, ipList[0])
@@ -441,10 +516,12 @@ class MainActivity : AppCompatActivity() {
             val ipList = getIpListFromUI()
             val domainName = domainInput.text.toString().trim()
             val keyPath = keyPathInput.text.toString().trim()
+            addLog("VPN permission granted")
             proceedWithStart(ipList, domainName, keyPath, getIpListFromUI()[0])
         } else {
             Toast.makeText(this, "VPN permission denied", Toast.LENGTH_SHORT).show()
             syncSwitchState(false)
+            addLog("VPN permission denied", isError = true)
         }
     }
 
@@ -463,6 +540,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, serviceIntent)
         Utility.startVpn(this, dns)
         updateStatusUI("Starting...", "Waiting...")
+        addLog("VPN service started with DNS: $dns")
     }
 
     private fun updateStatusUI(slipstreamStatus: String? = null, sshStatus: String? = null) {
@@ -506,6 +584,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         saveCurrentProfileData()
         LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver)
+        addLog("SlipstreamApp stopped")
         super.onDestroy()
     }
 }
