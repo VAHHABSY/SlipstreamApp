@@ -35,9 +35,7 @@ class CommandService : LifecycleService(), CoroutineScope {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var slipstreamProcess: Process? = null
-    private var proxyProcess: Process? = null
     private var slipstreamReaderJob: Job? = null
-    private var proxyReaderJob: Job? = null
     private var tunnelMonitorJob: Job? = null
     private var mainExecutionJob: Job? = null
 
@@ -45,20 +43,19 @@ class CommandService : LifecycleService(), CoroutineScope {
 
     private var resolversConfig: ArrayList<String> = arrayListOf()
     private var domainNameConfig: String = ""
-    private var privateKeyPath: String = ""
+    private var socks5Port: String = "1080"
     private var isRestarting = false
 
     companion object {
         const val EXTRA_RESOLVERS = "extra_ip_addresses_list"
         const val EXTRA_DOMAIN = "domain_name"
-        const val EXTRA_KEY_PATH = "private_key_path"
+        const val EXTRA_SOCKS5_PORT = "socks5_port"
         const val SLIPSTREAM_BINARY_NAME = "slipstream-client"
-        const val PROXY_CLIENT_BINARY_NAME = "proxy-client"
         const val ACTION_STATUS_UPDATE = "net.typeblob.socks.STATUS_UPDATE"
         const val ACTION_ERROR = "net.typeblob.socks.ERROR"
         const val ACTION_REQUEST_STATUS = "net.typeblob.socks.REQUEST_STATUS"
         const val EXTRA_STATUS_SLIPSTREAM = "status_slipstream"
-        const val EXTRA_STATUS_SSH = "status_ssh"
+        const val EXTRA_STATUS_SOCKS5 = "status_socks5"
         const val EXTRA_ERROR_MESSAGE = "error_message"
         const val EXTRA_ERROR_OUTPUT = "error_output"
         private const val MONITOR_INTERVAL_MS = 2000L
@@ -79,10 +76,11 @@ class CommandService : LifecycleService(), CoroutineScope {
 
         val newResolvers = intent?.getStringArrayListExtra(EXTRA_RESOLVERS) ?: arrayListOf()
         val newDomain = intent?.getStringExtra(EXTRA_DOMAIN) ?: ""
-        val newPrivateKeyPath = intent?.getStringExtra(EXTRA_KEY_PATH) ?: ""
+        val newSocks5Port = intent?.getStringExtra(EXTRA_SOCKS5_PORT) ?: "1080"
 
         if (newResolvers == resolversConfig &&
                         newDomain == domainNameConfig &&
+                        newSocks5Port == socks5Port &&
                         slipstreamProcess?.isAlive == true
         ) {
             Log.d(TAG, "Profile unchanged and alive. Skipping.")
@@ -91,9 +89,9 @@ class CommandService : LifecycleService(), CoroutineScope {
 
         resolversConfig = newResolvers
         domainNameConfig = newDomain
-        privateKeyPath = newPrivateKeyPath
+        socks5Port = newSocks5Port
 
-        Log.d(TAG, "Service starting/updating profile. Domain: $domainNameConfig")
+        Log.d(TAG, "Service starting/updating profile. Domain: $domainNameConfig, SOCKS5 Port: $socks5Port")
 
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
@@ -128,16 +126,13 @@ class CommandService : LifecycleService(), CoroutineScope {
 
                 try {
                     val slipstreamPath = copyBinaryToFilesDir(SLIPSTREAM_BINARY_NAME)
-                    val proxyPath = copyBinaryToFilesDir(PROXY_CLIENT_BINARY_NAME)
 
-                    if (slipstreamPath == null || proxyPath == null) {
-                        handleError("Binary setup failed", "Could not copy binaries")
+                    if (slipstreamPath == null) {
+                        handleError("Binary setup failed", "Could not copy slipstream binary")
                         return
                     }
 
-                    // Verify executable permissions
                     val slipstreamFile = File(slipstreamPath)
-                    val proxyFile = File(proxyPath)
                     
                     if (!slipstreamFile.canExecute()) {
                         Log.e(TAG, "Slipstream binary not executable, attempting to set permissions")
@@ -147,17 +142,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                             Log.e(TAG, "Failed to chmod slipstream: ${e.message}")
                         }
                     }
-                    
-                    if (!proxyFile.canExecute()) {
-                        Log.e(TAG, "Proxy binary not executable, attempting to set permissions")
-                        try {
-                            Runtime.getRuntime().exec("chmod 755 $proxyPath").waitFor()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to chmod proxy: ${e.message}")
-                        }
-                    }
 
-                    // Verify again after chmod
                     if (!slipstreamFile.canExecute()) {
                         handleError("Permission Error", "Cannot execute slipstream binary at $slipstreamPath")
                         return
@@ -165,8 +150,10 @@ class CommandService : LifecycleService(), CoroutineScope {
 
                     val commandList = mutableListOf(slipstreamPath, domainNameConfig)
                     resolversConfig.forEach { commandList.add(it) }
+                    commandList.add("--socks-port")
+                    commandList.add(socks5Port)
 
-                    Log.d(TAG, "Starting slipstream: ${commandList.joinToString(" ")}")
+                    Log.d(TAG, "Starting slipstream with SOCKS5: ${commandList.joinToString(" ")}")
 
                     slipstreamProcess = ProcessBuilder(commandList).redirectErrorStream(true).start()
 
@@ -184,9 +171,13 @@ class CommandService : LifecycleService(), CoroutineScope {
                                         if (line.contains(
                                                         "ListenerBind_Init failed",
                                                         ignoreCase = true
-                                                )
+                                                ) || line.contains("error", ignoreCase = true)
                                         ) {
-                                            launch { handleError("Listener bind failed", line) }
+                                            launch { handleError("Slipstream error", line) }
+                                        }
+                                        if (line.contains("SOCKS", ignoreCase = true) && 
+                                            line.contains("listening", ignoreCase = true)) {
+                                            sendStatusUpdate("Running", "Running on port $socks5Port")
                                         }
                                     }
                                 } catch (e: Exception) {
@@ -194,51 +185,13 @@ class CommandService : LifecycleService(), CoroutineScope {
                                 }
                             }
 
-                    delay(1000)
+                    delay(1500)
                     if (slipstreamProcess?.isAlive != true) {
                         handleError("Slipstream failed", "Process not alive after start")
                         return
                     }
 
-                    sendStatusUpdate("Running", "Waiting...")
-
-                    // Start SSH proxy if key is provided
-                    if (privateKeyPath.isNotBlank() && File(privateKeyPath).exists()) {
-                        val proxyCommand = listOf(proxyPath, privateKeyPath)
-                        Log.d(TAG, "Starting proxy: ${proxyCommand.joinToString(" ")}")
-
-                        proxyProcess =
-                                ProcessBuilder(proxyCommand).redirectErrorStream(true).start()
-
-                        proxyReaderJob =
-                                launch {
-                                    val reader =
-                                            BufferedReader(
-                                                    InputStreamReader(proxyProcess?.inputStream)
-                                            )
-                                    try {
-                                        reader.forEachLine { line ->
-                                            Log.d(TAG, "[proxy] $line")
-                                            if (line.contains("error", ignoreCase = true)) {
-                                                launch { handleError("Proxy error", line) }
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.d(TAG, "Proxy reader stopped: ${e.message}")
-                                    }
-                                }
-
-                        delay(500)
-                        if (proxyProcess?.isAlive == true) {
-                            sendStatusUpdate("Running", "Running")
-                        } else {
-                            sendStatusUpdate("Running", "Failed")
-                        }
-                    } else {
-                        Log.d(TAG, "No valid SSH key provided, skipping proxy")
-                        sendStatusUpdate("Running", "Stopped (No Key)")
-                    }
-
+                    sendStatusUpdate("Running", "Running on port $socks5Port")
                     startMonitoring()
                 } catch (e: Exception) {
                     Log.e(TAG, "Error starting tunnel: ${e.message}", e)
@@ -252,11 +205,6 @@ class CommandService : LifecycleService(), CoroutineScope {
                     sendStatusUpdate("Stopping...", "Stopping...")
                     tunnelMonitorJob?.cancel()
                     slipstreamReaderJob?.cancel()
-                    proxyReaderJob?.cancel()
-
-                    proxyProcess?.destroy()
-                    proxyProcess?.waitFor()
-                    proxyProcess = null
 
                     slipstreamProcess?.destroy()
                     slipstreamProcess?.waitFor()
@@ -301,9 +249,10 @@ class CommandService : LifecycleService(), CoroutineScope {
     private fun sendCurrentStatus(reason: String) {
         val slipStatus =
                 if (slipstreamProcess?.isAlive == true) "Running" else "Stopped"
-        val sshStatus = if (proxyProcess?.isAlive == true) "Running" else "Stopped"
-        Log.d(TAG, "Status request ($reason): Slip=$slipStatus, SSH=$sshStatus")
-        sendStatusUpdate(slipStatus, sshStatus)
+        val socksStatus = 
+                if (slipstreamProcess?.isAlive == true) "Running on port $socks5Port" else "Stopped"
+        Log.d(TAG, "Status request ($reason): Slip=$slipStatus, SOCKS5=$socksStatus")
+        sendStatusUpdate(slipStatus, socksStatus)
     }
 
     override fun onDestroy() {
@@ -338,17 +287,17 @@ class CommandService : LifecycleService(), CoroutineScope {
                 )
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("SlipstreamApp")
-                .setContentText("Running in background...")
+                .setContentText("SOCKS5 proxy running on port $socks5Port")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .build()
     }
 
-    private fun sendStatusUpdate(slipstreamStatus: String, sshStatus: String) {
+    private fun sendStatusUpdate(slipstreamStatus: String, socksStatus: String) {
         val intent =
                 Intent(ACTION_STATUS_UPDATE).apply {
                     putExtra(EXTRA_STATUS_SLIPSTREAM, slipstreamStatus)
-                    putExtra(EXTRA_STATUS_SSH, sshStatus)
+                    putExtra(EXTRA_STATUS_SOCKS5, socksStatus)
                 }
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
@@ -363,12 +312,10 @@ class CommandService : LifecycleService(), CoroutineScope {
                 }
             }
             
-            // Set executable permissions using multiple methods
-            file.setExecutable(true, false) // Java method
+            file.setExecutable(true, false)
             file.setReadable(true, false)
             file.setWritable(true, true)
             
-            // Also try chmod as fallback
             try {
                 Runtime.getRuntime().exec("chmod 755 ${file.absolutePath}").waitFor()
                 Log.d(TAG, "Set permissions for $name using chmod")
@@ -376,7 +323,6 @@ class CommandService : LifecycleService(), CoroutineScope {
                 Log.w(TAG, "chmod failed for $name: ${e.message}")
             }
             
-            // Verify permissions
             if (file.canExecute()) {
                 Log.d(TAG, "$name is executable")
             } else {
@@ -393,7 +339,6 @@ class CommandService : LifecycleService(), CoroutineScope {
     private fun cleanUpLingeringProcesses() {
         try {
             Runtime.getRuntime().exec(arrayOf("killall", "-9", SLIPSTREAM_BINARY_NAME)).waitFor()
-            Runtime.getRuntime().exec(arrayOf("killall", "-9", PROXY_CLIENT_BINARY_NAME)).waitFor()
         } catch (e: Exception) {
             Log.d(TAG, "Process cleanup: ${e.message}")
         }
