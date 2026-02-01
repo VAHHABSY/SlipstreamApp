@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,11 +36,16 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     
+    companion object {
+        private const val TAG = "SlipstreamApp"
+    }
+    
     private var commandService: CommandService? = null
     private var isBound = false
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            Log.d(TAG, "Service connected")
             val binder = service as CommandService.LocalBinder
             commandService = binder.getService()
             isBound = true
@@ -55,6 +61,7 @@ class MainActivity : ComponentActivity() {
         }
         
         override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d(TAG, "Service disconnected")
             commandService = null
             isBound = false
         }
@@ -68,14 +75,17 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
+            Log.d(TAG, "Notification permission granted")
             addLog("✓ Notification permission granted")
         } else {
+            Log.w(TAG, "Notification permission denied")
             addLog("✗ Notification permission denied")
         }
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate called")
         
         requestNotificationPermission()
         
@@ -93,12 +103,14 @@ class MainActivity : ComponentActivity() {
     
     override fun onStart() {
         super.onStart()
+        Log.d(TAG, "onStart - binding to service")
         val intent = Intent(this, CommandService::class.java)
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
     
     override fun onStop() {
         super.onStop()
+        Log.d(TAG, "onStop - unbinding from service")
         if (isBound) {
             unbindService(serviceConnection)
             isBound = false
@@ -112,9 +124,11 @@ class MainActivity : ComponentActivity() {
                     this,
                     Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_GRANTED -> {
+                    Log.d(TAG, "Notification permission already granted")
                     addLog("✓ Notification permission granted")
                 }
                 else -> {
+                    Log.d(TAG, "Requesting notification permission")
                     requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
@@ -124,7 +138,9 @@ class MainActivity : ComponentActivity() {
     private fun addLog(message: String) {
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
             .format(java.util.Date())
-        logs = logs + "[$timestamp] $message"
+        val logMessage = "[$timestamp] $message"
+        Log.d(TAG, "Log: $message")
+        logs = logs + logMessage
     }
     
     @Composable
@@ -134,6 +150,7 @@ class MainActivity : ComponentActivity() {
         var showLogsSheet by remember { mutableStateOf(false) }
         
         LaunchedEffect(Unit) {
+            Log.d(TAG, "Loading current profile")
             val profile = ProfileManager.loadCurrentProfile(this@MainActivity)
             currentProfile = profile
             addLog("ℹ️ Loaded profile: ${profile.name}")
@@ -163,7 +180,10 @@ class MainActivity : ComponentActivity() {
             // Profile Card
             ProfileCard(
                 profile = currentProfile,
-                onEditClick = { showProfileDialog = true }
+                onEditClick = { 
+                    Log.d(TAG, "Edit profile clicked")
+                    showProfileDialog = true 
+                }
             )
             
             Spacer(modifier = Modifier.height(8.dp))
@@ -186,17 +206,30 @@ class MainActivity : ComponentActivity() {
             // Control Buttons
             ControlButtons(
                 isRunning = slipstreamStatus is SlipstreamStatus.Running,
-                onStart = { startTunnel(currentProfile) },
-                onStop = { stopTunnel() },
-                onShowLogs = { showLogsSheet = true }
+                onStart = { 
+                    Log.d(TAG, "Start button clicked")
+                    startTunnel(currentProfile) 
+                },
+                onStop = { 
+                    Log.d(TAG, "Stop button clicked")
+                    stopTunnel() 
+                },
+                onShowLogs = { 
+                    Log.d(TAG, "Show logs clicked")
+                    showLogsSheet = true 
+                }
             )
         }
         
         if (showProfileDialog) {
             ProfileDialog(
                 profile = currentProfile,
-                onDismiss = { showProfileDialog = false },
+                onDismiss = { 
+                    Log.d(TAG, "Profile dialog dismissed")
+                    showProfileDialog = false 
+                },
                 onSave = { newProfile ->
+                    Log.d(TAG, "Saving profile: ${newProfile.name}")
                     ProfileManager.saveProfile(this@MainActivity, newProfile)
                     ProfileManager.setCurrentProfile(this@MainActivity, newProfile.name)
                     currentProfile = newProfile
@@ -209,7 +242,10 @@ class MainActivity : ComponentActivity() {
         if (showLogsSheet) {
             LogsBottomSheet(
                 logs = logs,
-                onDismiss = { showLogsSheet = false }
+                onDismiss = { 
+                    Log.d(TAG, "Logs sheet dismissed")
+                    showLogsSheet = false 
+                }
             )
         }
     }
@@ -458,13 +494,18 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun startTunnel(profile: Profile) {
+        Log.d(TAG, "=== START BUTTON PRESSED ===")
+        Log.d(TAG, "Profile: name=${profile.name}, domain=${profile.domain}, resolvers=${profile.resolvers}, port=${profile.port}")
+        
         addLog("ℹ️ Starting SOCKS5 proxy service...")
         
         if (profile.domain.isBlank() || profile.resolvers.isBlank()) {
+            Log.e(TAG, "ERROR: Config missing! domain=${profile.domain.isNotBlank()}, resolvers=${profile.resolvers.isNotBlank()}")
             addLog("❌ Config missing - Resolvers: ${profile.resolvers.isNotBlank()}, Domain: ${profile.domain.isNotBlank()}")
             return
         }
         
+        Log.d(TAG, "Config validated - Creating service intent...")
         addLog("ℹ️ Starting - Domain: ${profile.domain}, Resolvers: ${profile.resolvers}, Port: ${profile.port}")
         
         val intent = Intent(this, CommandService::class.java).apply {
@@ -473,33 +514,49 @@ class MainActivity : ComponentActivity() {
             putExtra("port", profile.port)
         }
         
-        startForegroundService(intent)
-        
-        slipstreamStatus = SlipstreamStatus.Starting("Initializing...")
-        socksStatus = SocksStatus.Waiting
-        
-        addLog("ℹ️ SOCKS5 proxy service started on port ${profile.port}")
+        try {
+            Log.d(TAG, "Attempting to start foreground service...")
+            startForegroundService(intent)
+            Log.d(TAG, "Service started successfully")
+            
+            slipstreamStatus = SlipstreamStatus.Starting("Initializing...")
+            socksStatus = SocksStatus.Waiting
+            
+            addLog("ℹ️ SOCKS5 proxy service started on port ${profile.port}")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException starting service", e)
+            addLog("❌ Permission error: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception starting service", e)
+            addLog("❌ ERROR: ${e.message}")
+        }
     }
     
     private fun stopTunnel() {
+        Log.d(TAG, "Stopping tunnel...")
         addLog("ℹ️ Stopping tunnel...")
-        stopService(Intent(this, CommandService::class.java))
         
-        slipstreamStatus = SlipstreamStatus.Stopped
-        socksStatus = SocksStatus.Stopped
-        
-        addLog("✓ Tunnel stopped")
+        try {
+            stopService(Intent(this, CommandService::class.java))
+            
+            slipstreamStatus = SlipstreamStatus.Stopped
+            socksStatus = SocksStatus.Stopped
+            
+            Log.d(TAG, "Tunnel stopped successfully")
+            addLog("✓ Tunnel stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping tunnel", e)
+            addLog("❌ Error stopping: ${e.message}")
+        }
     }
 }
 
-// Extension functions for Status display
 fun SlipstreamStatus.toDisplayString(): String = when (this) {
     is SlipstreamStatus.Stopped -> "Stopped"
     is SlipstreamStatus.Starting -> message
     is SlipstreamStatus.Running -> "Running"
     is SlipstreamStatus.Stopping -> "Stopping..."
     is SlipstreamStatus.Failed -> message
-    else -> "Unknown"
 }
 
 fun SlipstreamStatus.toColor(): Color = when (this) {
@@ -508,7 +565,6 @@ fun SlipstreamStatus.toColor(): Color = when (this) {
     is SlipstreamStatus.Running -> Color(0xFF66BB6A)
     is SlipstreamStatus.Stopping -> Color(0xFFFFA726)
     is SlipstreamStatus.Failed -> Color(0xFFEF5350)
-    else -> Color(0xFF757575)
 }
 
 fun SocksStatus.toDisplayString(): String = when (this) {
@@ -516,7 +572,6 @@ fun SocksStatus.toDisplayString(): String = when (this) {
     is SocksStatus.Waiting -> "Waiting..."
     is SocksStatus.Running -> "Running"
     is SocksStatus.Stopping -> "Stopping..."
-    else -> "Unknown"
 }
 
 fun SocksStatus.toColor(): Color = when (this) {
@@ -524,5 +579,4 @@ fun SocksStatus.toColor(): Color = when (this) {
     is SocksStatus.Waiting -> Color(0xFFFFA726)
     is SocksStatus.Running -> Color(0xFF66BB6A)
     is SocksStatus.Stopping -> Color(0xFFFFA726)
-    else -> Color(0xFF757575)
 }
