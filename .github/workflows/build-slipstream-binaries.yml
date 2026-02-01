@@ -1,0 +1,162 @@
+name: Build Slipstream Android Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-slipstream:
+    name: Build Slipstream Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout slipstream-plugin-android
+        uses: actions/checkout@v4
+        with:
+          repository: Mygod/slipstream-plugin-android
+          submodules: recursive
+          path: slipstream-plugin-android
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27.2.12479018
+          add-to-path: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 perl pkg-config
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build Slipstream binaries
+        working-directory: slipstream-plugin-android
+        run: |
+          chmod +x gradlew
+          ./gradlew cargoBuild
+          
+          echo "=== Build completed ==="
+          echo "Checking for built binaries..."
+          find . -name "libslipstream.so" -type f
+
+      - name: Extract and organize binaries
+        run: |
+          mkdir -p jniLibs/arm64-v8a
+          mkdir -p jniLibs/armeabi-v7a
+          mkdir -p jniLibs/x86_64
+          mkdir -p jniLibs/x86
+          
+          # Copy binaries from Rust build output
+          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/aarch64-linux-android/release/slipstream-client jniLibs/arm64-v8a/libslipstream.so || \
+            cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/aarch64-linux-android/debug/slipstream-client jniLibs/arm64-v8a/libslipstream.so
+          
+          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/armv7-linux-androideabi/release/slipstream-client jniLibs/armeabi-v7a/libslipstream.so || \
+            cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/armv7-linux-androideabi/debug/slipstream-client jniLibs/armeabi-v7a/libslipstream.so
+          
+          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/x86_64-linux-android/release/slipstream-client jniLibs/x86_64/libslipstream.so || \
+            cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/x86_64-linux-android/debug/slipstream-client jniLibs/x86_64/libslipstream.so
+          
+          cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/i686-linux-android/release/slipstream-client jniLibs/x86/libslipstream.so || \
+            cp slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/i686-linux-android/debug/slipstream-client jniLibs/x86/libslipstream.so
+          
+          # Strip debug symbols
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip jniLibs/arm64-v8a/libslipstream.so
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip jniLibs/armeabi-v7a/libslipstream.so
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip jniLibs/x86_64/libslipstream.so
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip jniLibs/x86/libslipstream.so
+          
+          echo "=== Binary Information ==="
+          for arch in arm64-v8a armeabi-v7a x86_64 x86; do
+            echo ""
+            echo "Architecture: $arch"
+            file jniLibs/$arch/libslipstream.so
+            ls -lh jniLibs/$arch/libslipstream.so
+          done
+
+      - name: Create README
+        run: |
+          cat > jniLibs/README.md << 'EOF'
+          # Slipstream Android Native Libraries
+          
+          Built from: https://github.com/Mygod/slipstream-plugin-android
+          
+          ## Installation
+          
+          Copy to your Android Studio project:
+          
+          ```
+          app/src/main/jniLibs/
+          ├── arm64-v8a/
+          │   └── libslipstream.so
+          ├── armeabi-v7a/
+          │   └── libslipstream.so
+          ├── x86_64/
+          │   └── libslipstream.so
+          └── x86/
+              └── libslipstream.so
+          ```
+          
+          ## Usage
+          
+          ```kotlin
+          val nativeLibDir = applicationInfo.nativeLibraryDir
+          val binaryPath = File(nativeLibDir, "libslipstream.so").absolutePath
+          
+          val process = ProcessBuilder(
+              binaryPath,
+              "domain.com",
+              "1.1.1.1",
+              "--socks-port",
+              "1081"
+          ).start()
+          ```
+          EOF
+          
+          echo "" >> jniLibs/README.md
+          echo "Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> jniLibs/README.md
+          echo "Commit: ${{ github.sha }}" >> jniLibs/README.md
+          echo "" >> jniLibs/README.md
+          echo "### Binary Sizes" >> jniLibs/README.md
+          echo '```' >> jniLibs/README.md
+          ls -lh jniLibs/*/*.so >> jniLibs/README.md
+          echo '```' >> jniLibs/README.md
+
+      - name: Create archive
+        run: |
+          zip -r slipstream-android-jniLibs.zip jniLibs/
+          sha256sum slipstream-android-jniLibs.zip > slipstream-android-jniLibs.zip.sha256
+          
+          echo "=== Archive Created ==="
+          ls -lh slipstream-android-jniLibs.zip
+          cat slipstream-android-jniLibs.zip.sha256
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: slipstream-android-binaries
+          path: |
+            slipstream-android-jniLibs.zip
+            slipstream-android-jniLibs.zip.sha256
