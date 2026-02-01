@@ -4,11 +4,9 @@ import android.Manifest
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.method.ScrollingMovementMethod
 import android.view.View
@@ -19,8 +17,6 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
-import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.ArrayList
 import java.util.Date
@@ -32,8 +28,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var resolversContainer: LinearLayout
     private lateinit var addResolverButton: Button
     private lateinit var domainInput: EditText
-    private lateinit var keyPathInput: EditText
-    private lateinit var btnBrowseKey: ImageButton
+    private lateinit var socks5PortInput: EditText
     private lateinit var tunnelSwitch: Switch
     private lateinit var profileSpinner: Spinner
     private lateinit var addProfileButton: ImageButton
@@ -41,8 +36,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var slipstreamStatusIndicator: TextView
     private lateinit var slipstreamStatusText: TextView
-    private lateinit var sshStatusIndicator: TextView
-    private lateinit var sshStatusText: TextView
+    private lateinit var socks5StatusIndicator: TextView
+    private lateinit var socks5StatusText: TextView
     
     // Log section
     private lateinit var logTextView: TextView
@@ -70,9 +65,9 @@ class MainActivity : AppCompatActivity() {
                         CommandService.ACTION_STATUS_UPDATE -> {
                             val slipstreamStatus =
                                     intent.getStringExtra(CommandService.EXTRA_STATUS_SLIPSTREAM)
-                            val sshStatus = intent.getStringExtra(CommandService.EXTRA_STATUS_SSH)
-                            updateStatusUI(slipstreamStatus, sshStatus)
-                            addLog("Status Update - Slipstream: $slipstreamStatus, SSH: $sshStatus")
+                            val socksStatus = intent.getStringExtra(CommandService.EXTRA_STATUS_SOCKS5)
+                            updateStatusUI(slipstreamStatus, socksStatus)
+                            addLog("Status Update - Slipstream: $slipstreamStatus, SOCKS5: $socksStatus")
                         }
                         CommandService.ACTION_ERROR -> {
                             val message =
@@ -82,27 +77,11 @@ class MainActivity : AppCompatActivity() {
                                     .show()
                             updateStatusUI(
                                     slipstreamStatus = "Failed: $message",
-                                    sshStatus = "Stopped"
+                                    socksStatus = "Stopped"
                             )
                             addLog("ERROR: $message", isError = true)
                         }
                     }
-                }
-            }
-
-    private val requestStoragePermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                if (isGranted) {
-                    openFilePicker()
-                    addLog("Storage permission granted")
-                } else {
-                    Toast.makeText(
-                                    this,
-                                    "Storage permission required to browse files",
-                                    Toast.LENGTH_SHORT
-                            )
-                            .show()
-                    addLog("Storage permission denied", isError = true)
                 }
             }
 
@@ -117,22 +96,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-    private val pickKeyFileLauncher =
-            registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-                uri?.let {
-                    val localPath = copyUriToInternalStorage(it)
-                    if (localPath != null) {
-                        keyPathInput.setText(localPath)
-                        saveCurrentProfileData()
-                        Toast.makeText(this, "Key imported successfully", Toast.LENGTH_SHORT).show()
-                        addLog("Key imported: $localPath")
-                    } else {
-                        Toast.makeText(this, "Failed to import key", Toast.LENGTH_SHORT).show()
-                        addLog("Failed to import key", isError = true)
-                    }
-                }
-            }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -142,8 +105,7 @@ class MainActivity : AppCompatActivity() {
         resolversContainer = findViewById(R.id.resolvers_container)
         addResolverButton = findViewById(R.id.add_resolver_button)
         domainInput = findViewById(R.id.domain_input)
-        keyPathInput = findViewById(R.id.key_path_input)
-        btnBrowseKey = findViewById(R.id.btn_browse_key)
+        socks5PortInput = findViewById(R.id.socks5_port_input)
         tunnelSwitch = findViewById(R.id.tunnel_switch)
         profileSpinner = findViewById(R.id.profile_spinner)
         addProfileButton = findViewById(R.id.add_profile_button)
@@ -151,8 +113,8 @@ class MainActivity : AppCompatActivity() {
 
         slipstreamStatusIndicator = findViewById(R.id.slipstream_status_indicator)
         slipstreamStatusText = findViewById(R.id.slipstream_status_text)
-        sshStatusIndicator = findViewById(R.id.ssh_status_indicator)
-        sshStatusText = findViewById(R.id.ssh_status_text)
+        socks5StatusIndicator = findViewById(R.id.socks5_status_indicator)
+        socks5StatusText = findViewById(R.id.socks5_status_text)
         
         // Initialize log section
         logTextView = findViewById(R.id.log_text_view)
@@ -165,13 +127,11 @@ class MainActivity : AppCompatActivity() {
 
         setupProfiles()
         
-        addLog("SlipstreamApp started")
+        addLog("SlipstreamApp started - SOCKS5 mode")
 
         addResolverButton.setOnClickListener { addResolverInput("", true) }
         addProfileButton.setOnClickListener { showAddProfileDialog() }
         deleteProfileButton.setOnClickListener { deleteCurrentProfile() }
-
-        btnBrowseKey.setOnClickListener { checkStoragePermissionAndOpenPicker() }
 
         tunnelSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (isUpdatingSwitch) return@setOnCheckedChangeListener
@@ -228,54 +188,6 @@ class MainActivity : AppCompatActivity() {
         logBuilder.clear()
         logTextView.text = ""
         addLog("Log cleared")
-    }
-
-    private fun copyUriToInternalStorage(uri: Uri): String? {
-        return try {
-            val fileName = getFileName(uri) ?: "id_ed25519"
-            val destinationFile = File(filesDir, fileName)
-
-            contentResolver.openInputStream(uri).use { input ->
-                FileOutputStream(destinationFile).use { output -> input?.copyTo(output) }
-            }
-            destinationFile.absolutePath
-        } catch (e: Exception) {
-            e.printStackTrace()
-            addLog("Copy error: ${e.message}", isError = true)
-            null
-        }
-    }
-
-    private fun getFileName(uri: Uri): String? {
-        var name: String? = null
-        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (cursor.moveToFirst()) {
-                name = cursor.getString(nameIndex)
-            }
-        }
-        return name
-    }
-
-    private fun checkStoragePermissionAndOpenPicker() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.READ_EXTERNAL_STORAGE
-                    ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                openFilePicker()
-            } else {
-                requestStoragePermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        } else {
-            openFilePicker()
-        }
-    }
-
-    private fun openFilePicker() {
-        pickKeyFileLauncher.launch(arrayOf("*/*"))
-        addLog("Opening file picker for SSH key")
     }
 
     private fun checkPermissionsAndStartService() {
@@ -339,10 +251,9 @@ class MainActivity : AppCompatActivity() {
 
         val ips = sharedPreferences.getString("profile_${profileName}_ips", "1.1.1.1")
         val domain = sharedPreferences.getString("profile_${profileName}_domain", "")
-        val defaultKeyPath = File(filesDir, "id_ed25519").absolutePath
-        val keyPath = sharedPreferences.getString("profile_${profileName}_key", defaultKeyPath)
+        val socks5Port = sharedPreferences.getString("profile_${profileName}_socks5_port", "1080")
 
-        keyPathInput.setText(keyPath)
+        socks5PortInput.setText(socks5Port)
         domainInput.setText(domain)
         val ipList = ips?.split(IP_SEPARATOR)?.filter { it.isNotBlank() } ?: listOf("1.1.1.1")
 
@@ -356,7 +267,7 @@ class MainActivity : AppCompatActivity() {
         sharedPreferences.edit().apply {
             putString("profile_${profileName}_ips", ipList.joinToString(IP_SEPARATOR))
             putString("profile_${profileName}_domain", domainInput.text.toString().trim())
-            putString("profile_${profileName}_key", keyPathInput.text.toString().trim())
+            putString("profile_${profileName}_socks5_port", socks5PortInput.text.toString().trim())
             apply()
         }
     }
@@ -382,6 +293,7 @@ class MainActivity : AppCompatActivity() {
                         sharedPreferences.edit().apply {
                             putString("profile_${name}_ips", "1.1.1.1")
                             putString("profile_${name}_domain", "")
+                            putString("profile_${name}_socks5_port", "1080")
                             apply()
                         }
 
@@ -479,7 +391,7 @@ class MainActivity : AppCompatActivity() {
     private fun startCommandService() {
         val ipList = getIpListFromUI()
         val domainName = domainInput.text.toString().trim()
-        val keyPath = keyPathInput.text.toString().trim()
+        val socks5Port = socks5PortInput.text.toString().trim()
 
         if (ipList.isEmpty() || domainName.isBlank()) {
             Toast.makeText(this, "Configuration missing", Toast.LENGTH_SHORT).show()
@@ -488,25 +400,21 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        addLog("Starting service - Domain: $domainName, Resolvers: ${ipList.joinToString(", ")}")
-
-        // Make key file optional - warn but don't block
-        if (keyPath.isBlank()) {
-            Toast.makeText(this, "Warning: No key file selected. SSH features will not work.", Toast.LENGTH_LONG).show()
-            addLog("Warning: No SSH key file selected", isError = false)
-        } else if (!File(keyPath).exists()) {
-            Toast.makeText(this, "Warning: Key file not found. SSH features will not work.", Toast.LENGTH_LONG).show()
-            addLog("Warning: SSH key file not found at: $keyPath", isError = false)
-        } else {
-            addLog("Using SSH key: $keyPath")
+        if (socks5Port.isBlank() || socks5Port.toIntOrNull() == null) {
+            Toast.makeText(this, "Invalid SOCKS5 port", Toast.LENGTH_SHORT).show()
+            syncSwitchState(false)
+            addLog("Invalid SOCKS5 port: $socks5Port", isError = true)
+            return
         }
+
+        addLog("Starting service - Domain: $domainName, Resolvers: ${ipList.joinToString(", ")}, SOCKS5 Port: $socks5Port")
 
         val vpnPrepareIntent = VpnService.prepare(this)
         if (vpnPrepareIntent != null) {
             addLog("Requesting VPN permission...")
             startActivityForResult(vpnPrepareIntent, 0)
         } else {
-            proceedWithStart(ipList, domainName, keyPath, ipList[0])
+            proceedWithStart(ipList, domainName, socks5Port, ipList[0])
         }
     }
 
@@ -515,9 +423,9 @@ class MainActivity : AppCompatActivity() {
         if (resultCode == RESULT_OK) {
             val ipList = getIpListFromUI()
             val domainName = domainInput.text.toString().trim()
-            val keyPath = keyPathInput.text.toString().trim()
+            val socks5Port = socks5PortInput.text.toString().trim()
             addLog("VPN permission granted")
-            proceedWithStart(ipList, domainName, keyPath, getIpListFromUI()[0])
+            proceedWithStart(ipList, domainName, socks5Port, getIpListFromUI()[0])
         } else {
             Toast.makeText(this, "VPN permission denied", Toast.LENGTH_SHORT).show()
             syncSwitchState(false)
@@ -528,22 +436,22 @@ class MainActivity : AppCompatActivity() {
     private fun proceedWithStart(
             ipList: ArrayList<String>,
             domainName: String,
-            keyPath: String,
+            socks5Port: String,
             dns: String
     ) {
         val serviceIntent =
                 Intent(this, CommandService::class.java).apply {
                     putStringArrayListExtra(CommandService.EXTRA_RESOLVERS, ipList)
                     putExtra(CommandService.EXTRA_DOMAIN, domainName)
-                    putExtra(CommandService.EXTRA_KEY_PATH, keyPath)
+                    putExtra(CommandService.EXTRA_SOCKS5_PORT, socks5Port)
                 }
         ContextCompat.startForegroundService(this, serviceIntent)
         Utility.startVpn(this, dns)
         updateStatusUI("Starting...", "Waiting...")
-        addLog("VPN service started with DNS: $dns")
+        addLog("VPN service started with DNS: $dns, SOCKS5 port: $socks5Port")
     }
 
-    private fun updateStatusUI(slipstreamStatus: String? = null, sshStatus: String? = null) {
+    private fun updateStatusUI(slipstreamStatus: String? = null, socksStatus: String? = null) {
         slipstreamStatus?.let { status ->
             slipstreamStatusText.text = status
             val color =
@@ -562,13 +470,13 @@ class MainActivity : AppCompatActivity() {
                     syncSwitchState(false)
         }
 
-        sshStatus?.let { status ->
-            sshStatusText.text = status
+        socksStatus?.let { status ->
+            socks5StatusText.text = status
             val color =
                     if (status.contains("Running", true)) Color.GREEN
                     else if (status.contains("Stopped", true)) Color.RED else Color.YELLOW
-            sshStatusIndicator.setTextColor(color)
-            sshStatusIndicator.text =
+            socks5StatusIndicator.setTextColor(color)
+            socks5StatusIndicator.text =
                     if (color == Color.GREEN) "✔" else if (color == Color.RED) "❌" else "🟡"
         }
     }
