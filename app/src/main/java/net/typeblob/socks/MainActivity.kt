@@ -39,7 +39,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var socks5StatusIndicator: TextView
     private lateinit var socks5StatusText: TextView
     
-    // Log section
     private lateinit var logTextView: TextView
     private lateinit var clearLogButton: Button
     private val logBuilder = StringBuilder()
@@ -116,7 +115,6 @@ class MainActivity : AppCompatActivity() {
         socks5StatusIndicator = findViewById(R.id.socks5_status_indicator)
         socks5StatusText = findViewById(R.id.socks5_status_text)
         
-        // Initialize log section
         logTextView = findViewById(R.id.log_text_view)
         clearLogButton = findViewById(R.id.clear_log_button)
         
@@ -167,7 +165,6 @@ class MainActivity : AppCompatActivity() {
         
         logBuilder.append(logLine)
         
-        // Keep only last maxLogLines
         val lines = logBuilder.lines()
         if (lines.size > maxLogLines) {
             logBuilder.clear()
@@ -176,7 +173,6 @@ class MainActivity : AppCompatActivity() {
         
         runOnUiThread {
             logTextView.text = logBuilder.toString()
-            // Auto-scroll to bottom
             val scrollAmount = logTextView.layout?.getLineTop(logTextView.lineCount) ?: 0
             if (scrollAmount > logTextView.height) {
                 logTextView.scrollTo(0, scrollAmount - logTextView.height)
