@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -142,17 +141,25 @@ class CommandService : LifecycleService(), CoroutineScope {
                     
                     if (!slipstreamFile.canExecute()) {
                         Log.e(TAG, "Slipstream binary not executable, attempting to set permissions")
-                        Runtime.getRuntime().exec("chmod 755 $slipstreamPath").waitFor()
+                        try {
+                            Runtime.getRuntime().exec("chmod 755 $slipstreamPath").waitFor()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to chmod slipstream: ${e.message}")
+                        }
                     }
                     
                     if (!proxyFile.canExecute()) {
                         Log.e(TAG, "Proxy binary not executable, attempting to set permissions")
-                        Runtime.getRuntime().exec("chmod 755 $proxyPath").waitFor()
+                        try {
+                            Runtime.getRuntime().exec("chmod 755 $proxyPath").waitFor()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to chmod proxy: ${e.message}")
+                        }
                     }
 
                     // Verify again after chmod
                     if (!slipstreamFile.canExecute()) {
-                        handleError("Permission Error", "Cannot execute slipstream binary")
+                        handleError("Permission Error", "Cannot execute slipstream binary at $slipstreamPath")
                         return
                     }
 
@@ -297,11 +304,6 @@ class CommandService : LifecycleService(), CoroutineScope {
         val sshStatus = if (proxyProcess?.isAlive == true) "Running" else "Stopped"
         Log.d(TAG, "Status request ($reason): Slip=$slipStatus, SSH=$sshStatus")
         sendStatusUpdate(slipStatus, sshStatus)
-    }
-
-    override fun onBind(intent: Intent?): IBinder? {
-        super.onBind(intent)
-        return null
     }
 
     override fun onDestroy() {
