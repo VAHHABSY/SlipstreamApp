@@ -82,7 +82,7 @@
             android:text="+ Add Resolver"
             android:layout_marginBottom="16dp" />
 
-        <!-- SOCKS5 Port Input (REPLACES SSH Key Input) -->
+        <!-- SOCKS5 Port Input -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -207,6 +207,15 @@
                 android:textStyle="bold" />
 
             <Button
+                android:id="@+id/copy_log_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Copy"
+                android:textSize="12sp"
+                android:padding="8dp"
+                android:layout_marginEnd="8dp" />
+
+            <Button
                 android:id="@+id/clear_log_button"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -215,17 +224,25 @@
                 android:padding="8dp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/log_text_view"
+        <ScrollView
+            android:id="@+id/log_scroll_view"
             android:layout_width="match_parent"
-            android:layout_height="200dp"
+            android:layout_height="250dp"
             android:background="#F5F5F5"
             android:padding="8dp"
-            android:textSize="12sp"
-            android:fontFamily="monospace"
-            android:scrollbars="vertical"
-            android:textColor="#000000"
-            android:text="[Log messages will appear here]" />
+            android:scrollbars="vertical">
+
+            <TextView
+                android:id="@+id/log_text_view"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="12sp"
+                android:fontFamily="monospace"
+                android:textColor="#000000"
+                android:textIsSelectable="true"
+                android:text="[Log messages will appear here]" />
+
+        </ScrollView>
 
     </LinearLayout>
 </ScrollView>
