@@ -28,7 +28,7 @@ jobs:
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r27.2.12479018
+          ndk-version: r26c
           add-to-path: true
 
       - name: Set up JDK 17
