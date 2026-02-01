@@ -11,27 +11,19 @@ jobs:
   build-slipstream:
     name: Build Slipstream Binaries
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 2 hour timeout
+    timeout-minutes: 120
 
     steps:
       - name: Checkout your SlipstreamApp repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0  # Full history for proper git operations
+          fetch-depth: 0
 
       - name: Verify repository structure
         run: |
           echo "=== Repository Structure ==="
           ls -la
-          
-          # Check if app directory exists
-          if [ ! -d "app" ]; then
-            echo "⚠️  Warning: 'app' directory not found. Creating it..."
-            mkdir -p app/src/main/jniLibs
-          fi
-          
-          # Ensure jniLibs directory exists
           mkdir -p app/src/main/jniLibs
           echo "✓ Directory structure verified"
 
@@ -44,30 +36,9 @@ jobs:
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
-        id: setup-ndk
         with:
           ndk-version: r26c
           add-to-path: true
-
-      - name: Verify NDK installation
-        run: |
-          if [ -z "$ANDROID_NDK_HOME" ]; then
-            echo "❌ ERROR: ANDROID_NDK_HOME is not set!"
-            exit 1
-          fi
-          
-          if [ ! -d "$ANDROID_NDK_HOME" ]; then
-            echo "❌ ERROR: NDK directory does not exist: $ANDROID_NDK_HOME"
-            exit 1
-          fi
-          
-          echo "✓ NDK verified at: $ANDROID_NDK_HOME"
-          
-          if [ -f "$ANDROID_NDK_HOME/source.properties" ]; then
-            echo ""
-            echo "=== NDK Version Information ==="
-            cat "$ANDROID_NDK_HOME/source.properties" | grep "Pkg"
-          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -76,34 +47,15 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Verify Java installation
-        run: |
-          java -version
-          echo "JAVA_HOME: $JAVA_HOME"
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
 
-      - name: Verify Rust installation
-        run: |
-          rustc --version
-          cargo --version
-          echo ""
-          echo "=== Installed Rust targets ==="
-          rustup target list --installed
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build python3 perl pkg-config
-          
-          echo "=== Installed versions ==="
-          cmake --version
-          ninja --version
-          python3 --version
-          perl --version
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -124,7 +76,6 @@ jobs:
       - name: Patch NDK version to match installed version
         working-directory: slipstream-plugin-android
         run: |
-          # Get the actual installed NDK version from source.properties
           if [ -f "$ANDROID_NDK_HOME/source.properties" ]; then
             ACTUAL_NDK_VERSION=$(cat $ANDROID_NDK_HOME/source.properties | grep 'Pkg.Revision' | cut -d'=' -f2 | tr -d ' \r\n')
             echo "Found installed NDK version: $ACTUAL_NDK_VERSION"
@@ -137,7 +88,6 @@ jobs:
           echo "=== Original build.gradle.kts ndkVersion ==="
           grep -n "ndkVersion" app/build.gradle.kts || echo "ndkVersion line not found"
           
-          # Update ndkVersion to match installed version
           if grep -q "ndkVersion" app/build.gradle.kts; then
             sed -i "s/ndkVersion = \"[^\"]*\"/ndkVersion = \"$ACTUAL_NDK_VERSION\"/" app/build.gradle.kts
             echo ""
@@ -146,7 +96,7 @@ jobs:
             echo ""
             echo "✓ NDK version updated successfully"
           else
-            echo "⚠️  Warning: ndkVersion line not found in build.gradle.kts"
+            echo "⚠️  Warning: ndkVersion line not found"
           fi
 
       - name: Set NDK environment variables
@@ -154,49 +104,69 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> $GITHUB_ENV
           echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          
-          echo "=== Environment Information ==="
-          echo "ANDROID_HOME: $ANDROID_HOME"
-          echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
 
-      - name: Create local.properties for Gradle
+      - name: Create local.properties
         working-directory: slipstream-plugin-android
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           echo "ndk.dir=$ANDROID_NDK_HOME" >> local.properties
-          
-          echo "=== local.properties content ==="
           cat local.properties
 
       - name: Grant execute permission to gradlew
         working-directory: slipstream-plugin-android
+        run: chmod +x gradlew
+
+      - name: Check build environment
         run: |
-          chmod +x gradlew
-          ls -la gradlew
+          echo "=== System Information ==="
+          echo "CPU cores: $(nproc)"
+          free -h
+          df -h /
+          echo ""
+          echo "=== Rust Information ==="
+          rustc --version
+          cargo --version
+          rustup show
+          echo ""
+          echo "=== Environment ==="
+          env | grep -E "ANDROID|NDK|RUST|CARGO" | sort
 
       - name: Build Slipstream binaries
         working-directory: slipstream-plugin-android
         run: |
           echo "=== Starting Rust build for Android ==="
-          echo "This may take 15-30 minutes..."
+          echo "This will take 15-30 minutes..."
+          echo ""
           
-          # Run with stacktrace and info for better debugging
-          ./gradlew cargoBuild --stacktrace --info || {
-            echo "❌ Build failed! Checking for partial results..."
-            find . -name "slipstream-client" -type f 2>/dev/null || echo "No binaries found"
+          set +e
+          ./gradlew cargoBuild 2>&1 | tee build.log
+          BUILD_EXIT_CODE=$?
+          set -e
+          
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "❌ BUILD FAILED with exit code $BUILD_EXIT_CODE"
+            echo ""
+            echo "=== ERROR messages ==="
+            grep -i "error" build.log | tail -30 || echo "No error messages"
+            echo ""
+            echo "=== FAILED messages ==="
+            grep -i "failed" build.log | tail -20 || echo "No failed messages"
+            echo ""
+            echo "=== Last 80 lines of output ==="
+            tail -n 80 build.log
+            echo ""
+            echo "=== Checking for partial binaries ==="
+            find . -name "slipstream-client" -type f 2>/dev/null || echo "None found"
             exit 1
-          }
+          fi
           
-          echo ""
           echo "✓ Build completed successfully"
-          echo ""
-          echo "=== Checking for built binaries ==="
-          find app/src/main/rust/slipstream-rust/target -name "slipstream-client" -type f 2>/dev/null || echo "No binaries found in expected location"
 
       - name: Verify all binaries were built
         working-directory: slipstream-plugin-android
         run: |
-          echo "=== Verifying binaries for all architectures ==="
+          echo "=== Verifying binaries ==="
           MISSING=0
           
           for target in "aarch64-linux-android:arm64-v8a" "armv7-linux-androideabi:armeabi-v7a" "x86_64-linux-android:x86_64" "i686-linux-android:x86"; do
@@ -204,38 +174,26 @@ jobs:
             
             if [ -f "app/src/main/rust/slipstream-rust/target/${rust_target}/release/slipstream-client" ] || \
                [ -f "app/src/main/rust/slipstream-rust/target/${rust_target}/debug/slipstream-client" ]; then
-              echo "✓ Found binary for ${abi}"
+              echo "✓ Found ${abi}"
             else
-              echo "❌ Missing binary for ${abi} (${rust_target})"
+              echo "❌ Missing ${abi}"
               MISSING=$((MISSING + 1))
             fi
           done
           
           if [ $MISSING -gt 0 ]; then
-            echo ""
-            echo "❌ ERROR: $MISSING architecture(s) failed to build"
+            echo "❌ $MISSING architectures failed"
             exit 1
           fi
           
-          echo ""
-          echo "✓ All binaries built successfully"
+          echo "✓ All binaries built"
 
-      - name: Create jniLibs directory structure
+      - name: Create jniLibs directory
         run: |
-          mkdir -p app/src/main/jniLibs/arm64-v8a
-          mkdir -p app/src/main/jniLibs/armeabi-v7a
-          mkdir -p app/src/main/jniLibs/x86_64
-          mkdir -p app/src/main/jniLibs/x86
-          
-          echo "✓ jniLibs directory structure created"
+          mkdir -p app/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64,x86}
 
-      - name: Copy and process binaries
+      - name: Copy binaries
         run: |
-          echo "=== Copying binaries to jniLibs ==="
-          
-          FAILED=0
-          
-          # Function to copy binary (try release first, fall back to debug)
           copy_binary() {
             local target=$1
             local abi=$2
@@ -243,216 +201,52 @@ jobs:
             if [ -f "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/release/slipstream-client" ]; then
               cp "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/release/slipstream-client" \
                  "app/src/main/jniLibs/${abi}/libslipstream.so"
-              echo "✓ Copied ${abi} (release build)"
+              echo "✓ Copied ${abi} (release)"
               return 0
             elif [ -f "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/debug/slipstream-client" ]; then
               cp "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/debug/slipstream-client" \
                  "app/src/main/jniLibs/${abi}/libslipstream.so"
-              echo "✓ Copied ${abi} (debug build)"
+              echo "✓ Copied ${abi} (debug)"
               return 0
             else
-              echo "❌ Failed to find ${abi} binary"
+              echo "❌ Failed ${abi}"
               return 1
             fi
           }
           
-          copy_binary "aarch64-linux-android" "arm64-v8a" || FAILED=$((FAILED + 1))
-          copy_binary "armv7-linux-androideabi" "armeabi-v7a" || FAILED=$((FAILED + 1))
-          copy_binary "x86_64-linux-android" "x86_64" || FAILED=$((FAILED + 1))
-          copy_binary "i686-linux-android" "x86" || FAILED=$((FAILED + 1))
-          
-          if [ $FAILED -gt 0 ]; then
-            echo ""
-            echo "❌ ERROR: Failed to copy $FAILED binary/binaries"
-            exit 1
-          fi
-          
-          echo ""
-          echo "✓ All binaries copied successfully"
+          copy_binary "aarch64-linux-android" "arm64-v8a"
+          copy_binary "armv7-linux-androideabi" "armeabi-v7a"
+          copy_binary "x86_64-linux-android" "x86_64"
+          copy_binary "i686-linux-android" "x86"
 
-      - name: Strip debug symbols
+      - name: Strip binaries
         run: |
-          echo "=== Stripping debug symbols ==="
-          
-          STRIP_TOOL="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          
-          if [ ! -f "$STRIP_TOOL" ]; then
-            echo "⚠️  Warning: llvm-strip not found at $STRIP_TOOL"
-            echo "Searching for llvm-strip..."
-            STRIP_TOOL=$(find $ANDROID_NDK_HOME -name "llvm-strip" -type f 2>/dev/null | head -n 1)
-            if [ -z "$STRIP_TOOL" ]; then
-              echo "⚠️  Warning: llvm-strip not found anywhere, skipping symbol stripping"
-            else
-              echo "Found llvm-strip at: $STRIP_TOOL"
-            fi
-          fi
-          
-          if [ -n "$STRIP_TOOL" ] && [ -f "$STRIP_TOOL" ]; then
-            for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-              if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-                SIZE_BEFORE=$(stat -c%s "app/src/main/jniLibs/${abi}/libslipstream.so" 2>/dev/null || stat -f%z "app/src/main/jniLibs/${abi}/libslipstream.so" 2>/dev/null)
-                "$STRIP_TOOL" "app/src/main/jniLibs/${abi}/libslipstream.so"
-                SIZE_AFTER=$(stat -c%s "app/src/main/jniLibs/${abi}/libslipstream.so" 2>/dev/null || stat -f%z "app/src/main/jniLibs/${abi}/libslipstream.so" 2>/dev/null)
-                SAVED=$((SIZE_BEFORE - SIZE_AFTER))
-                echo "✓ Stripped ${abi}: $(numfmt --to=iec $SIZE_BEFORE 2>/dev/null || echo $SIZE_BEFORE) → $(numfmt --to=iec $SIZE_AFTER 2>/dev/null || echo $SIZE_AFTER) (saved $(numfmt --to=iec $SAVED 2>/dev/null || echo $SAVED))"
-              fi
-            done
-          fi
-
-      - name: Verify final binaries
-        run: |
-          echo "=== Final Binary Information ==="
-          
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-              echo ""
-              echo "Architecture: ${abi}"
-              file "app/src/main/jniLibs/${abi}/libslipstream.so"
-              ls -lh "app/src/main/jniLibs/${abi}/libslipstream.so"
-              
-              # Check if file is executable
-              if [ -x "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-                echo "  ✓ Binary is executable"
-              else
-                echo "  ⚠️  Binary is not executable, fixing permissions..."
-                chmod +x "app/src/main/jniLibs/${abi}/libslipstream.so"
-              fi
-            else
-              echo ""
-              echo "❌ Missing: ${abi}"
-            fi
+            [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ] && "$STRIP" "app/src/main/jniLibs/${abi}/libslipstream.so" && echo "✓ Stripped ${abi}"
           done
 
-      - name: Create/Update README in jniLibs
+      - name: Create README
         run: |
           cat > app/src/main/jniLibs/README.md << 'EOF'
-          # Slipstream Android Native Libraries
+          # Slipstream Android Binaries
           
-          These binaries are automatically built from: https://github.com/Mygod/slipstream-plugin-android
-          
-          ## Build Information
-          
+          Built from: https://github.com/Mygod/slipstream-plugin-android
           EOF
-          
-          echo "Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> app/src/main/jniLibs/README.md
-          echo "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> app/src/main/jniLibs/README.md
-          echo "Commit: ${{ github.sha }}" >> app/src/main/jniLibs/README.md
-          echo "" >> app/src/main/jniLibs/README.md
-          echo "## Binary Sizes" >> app/src/main/jniLibs/README.md
-          echo '```' >> app/src/main/jniLibs/README.md
-          ls -lh app/src/main/jniLibs/*/*.so 2>/dev/null >> app/src/main/jniLibs/README.md || echo "No binaries found" >> app/src/main/jniLibs/README.md
-          echo '```' >> app/src/main/jniLibs/README.md
-          
-          echo "" >> app/src/main/jniLibs/README.md
-          cat >> app/src/main/jniLibs/README.md << 'EOF'
-          
-          ## Usage in Your App
-          
-          The binaries are automatically loaded by Android from the correct architecture folder.
-          
-          ```kotlin
-          val nativeLibDir = applicationInfo.nativeLibraryDir
-          val binaryPath = File(nativeLibDir, "libslipstream.so").absolutePath
-          
-          val process = ProcessBuilder(
-              binaryPath,
-              "domain.com",
-              "1.1.1.1",
-              "--socks-port",
-              "1081"
-          ).start()
-          ```
-          EOF
-          
-          echo "✓ README created"
+          echo "Built: $(date -u)" >> app/src/main/jniLibs/README.md
+          ls -lh app/src/main/jniLibs/*/*.so >> app/src/main/jniLibs/README.md
 
-      - name: Check for changes
-        id: git-check
-        run: |
-          # Add new files
-          git add -A app/src/main/jniLibs/
-          
-          # Check if there are any changes
-          if git diff --cached --quiet; then
-            echo "changes=false" >> $GITHUB_OUTPUT
-            echo "No changes detected"
-          else
-            echo "changes=true" >> $GITHUB_OUTPUT
-            echo "Changes detected:"
-            git diff --cached --stat
-          fi
-
-      - name: Commit and push binaries
-        if: steps.git-check.outputs.changes == 'true'
+      - name: Commit binaries
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git commit -m "🤖 Auto-update slipstream binaries
+          git add app/src/main/jniLibs/
+          git diff --cached --quiet || git commit -m "🤖 Update slipstream binaries" && git push
 
-          - Built from Mygod/slipstream-plugin-android
-          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          - Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          
-          Binary sizes:
-          $(ls -lh app/src/main/jniLibs/*/*.so 2>/dev/null | awk '{print "- " $9 ": " $5}' || echo '- No binaries')"
-          
-          git push || {
-            echo "❌ Failed to push changes"
-            echo "This might be due to branch protection rules or permissions"
-            exit 1
-          }
-          
-          echo "✓ Changes committed and pushed successfully"
-
-      - name: Create backup archive
-        if: always()
-        run: |
-          if [ -d "app/src/main/jniLibs" ] && [ "$(find app/src/main/jniLibs -name '*.so' 2>/dev/null)" ]; then
-            zip -r slipstream-binaries-backup.zip app/src/main/jniLibs/
-            sha256sum slipstream-binaries-backup.zip > slipstream-binaries-backup.zip.sha256
-            echo "✓ Backup archive created"
-          else
-            echo "⚠️  No binaries to backup"
-          fi
-
-      - name: Upload backup artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: slipstream-binaries-backup
-          path: |
-            slipstream-binaries-backup.zip
-            slipstream-binaries-backup.zip.sha256
-          retention-days: 30
+          name: slipstream-binaries
+          path: app/src/main/jniLibs/
           if-no-files-found: warn
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "## 📊 Slipstream Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Binary Information" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Architecture | Size | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------------|------|--------|" >> $GITHUB_STEP_SUMMARY
-          
-          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-              size=$(ls -lh "app/src/main/jniLibs/${abi}/libslipstream.so" 2>/dev/null | awk '{print $5}')
-              echo "| ${abi} | ${size} | ✅ Built |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "| ${abi} | - | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.git-check.outputs.changes }}" == "true" ]; then
-            echo "### 🎉 Binaries committed to repository" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The binaries have been automatically committed to \`app/src/main/jniLibs/\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ℹ️ No changes detected" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The binaries are identical to the existing ones or no binaries were built." >> $GITHUB_STEP_SUMMARY
-          fi
