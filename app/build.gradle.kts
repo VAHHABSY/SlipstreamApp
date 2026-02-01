@@ -13,12 +13,6 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
-        vectorDrawables {
-            useSupportLibrary = true
-        }
     }
 
     buildFeatures {
@@ -71,6 +65,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.runtime:runtime")
+
+    // Material Components (for themes in AndroidManifest)
+    implementation("com.google.android.material:material:1.11.0")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

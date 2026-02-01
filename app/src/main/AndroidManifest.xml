@@ -14,13 +14,13 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar">
+        android:theme="@android:style/Theme.Material.Light">
         
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -31,8 +31,7 @@
             android:name=".CommandService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>
