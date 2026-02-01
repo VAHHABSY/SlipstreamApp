@@ -95,236 +95,248 @@ class CommandService : LifecycleService(), CoroutineScope {
         privateKeyPath = newPrivateKeyPath
 
         Log.d(TAG, "Service starting/updating profile. Domain: $domainNameConfig")
-        startForeground(NOTIFICATION_ID, buildForegroundNotification())
+
+        val notification = createNotification()
+        startForeground(NOTIFICATION_ID, notification)
+
+        cleanUpLingeringProcesses()
+        sendStatusUpdate("Cleaning up...", "Waiting...")
 
         mainExecutionJob?.cancel()
-        mainExecutionJob = launch {
-            try {
-                startTunnelSequence(resolversConfig, domainNameConfig)
-            } catch (e: CancellationException) {
-                Log.d(TAG, "Startup job cancelled (normal for profile switch)")
-            }
-        }
+        mainExecutionJob =
+                launch {
+                    try {
+                        delay(1000)
+                        stopTunnel()
+                        delay(500)
+                        startTunnel()
+                    } catch (e: CancellationException) {
+                        Log.d(TAG, "Main execution cancelled")
+                    } catch (e: Exception) {
+                        handleError("Setup failed", e.message ?: "Unknown error")
+                    }
+                }
 
         return START_STICKY
     }
 
-    private fun sendCurrentStatus(logTag: String) {
-        val sAlive = slipstreamProcess?.isAlive == true
-        val proxyAlive = proxyProcess?.isAlive == true
-        sendStatusUpdate(
-                if (sAlive) "Running" else "Stopped",
-                if (proxyAlive) "Running" else "Stopped"
-        )
-    }
+    private suspend fun startTunnel() =
+            tunnelMutex.withLock {
+                if (slipstreamProcess?.isAlive == true) {
+                    Log.d(TAG, "Tunnel already running")
+                    return
+                }
 
-    private suspend fun startTunnelSequence(resolvers: ArrayList<String>, domainName: String) {
-        tunnelMutex.withLock {
-            isRestarting = true
-            try {
-                sendStatusUpdate("Cleaning up...", "Waiting...")
-                tunnelMonitorJob?.cancel()
-                slipstreamReaderJob?.cancel()
-                proxyReaderJob?.cancel()
+                try {
+                    val slipstreamPath = copyBinaryToFilesDir(SLIPSTREAM_BINARY_NAME)
+                    val proxyPath = copyBinaryToFilesDir(PROXY_CLIENT_BINARY_NAME)
 
-                stopBackgroundProcesses()
-                cleanUpLingeringProcesses()
+                    if (slipstreamPath == null || proxyPath == null) {
+                        handleError("Binary setup failed", "Could not copy binaries")
+                        return
+                    }
 
-                val slipstreamPath = copyBinaryToFilesDir(SLIPSTREAM_BINARY_NAME)
-                val proxyPath = copyBinaryToFilesDir(PROXY_CLIENT_BINARY_NAME)
+                    // Verify executable permissions
+                    val slipstreamFile = File(slipstreamPath)
+                    val proxyFile = File(proxyPath)
+                    
+                    if (!slipstreamFile.canExecute()) {
+                        Log.e(TAG, "Slipstream binary not executable, attempting to set permissions")
+                        Runtime.getRuntime().exec("chmod 755 $slipstreamPath").waitFor()
+                    }
+                    
+                    if (!proxyFile.canExecute()) {
+                        Log.e(TAG, "Proxy binary not executable, attempting to set permissions")
+                        Runtime.getRuntime().exec("chmod 755 $proxyPath").waitFor()
+                    }
 
-                if (slipstreamPath != null && proxyPath != null) {
-                    // Fix Private Key Permissions (Critical for SSH/Proxy clients)
-                    if (privateKeyPath.isNotEmpty()) {
-                        try {
-                            Runtime.getRuntime()
-                                    .exec(arrayOf("chmod", "600", privateKeyPath))
-                                    .waitFor()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to chmod key: ${e.message}")
+                    // Verify again after chmod
+                    if (!slipstreamFile.canExecute()) {
+                        handleError("Permission Error", "Cannot execute slipstream binary")
+                        return
+                    }
+
+                    val commandList = mutableListOf(slipstreamPath, domainNameConfig)
+                    resolversConfig.forEach { commandList.add(it) }
+
+                    Log.d(TAG, "Starting slipstream: ${commandList.joinToString(" ")}")
+
+                    slipstreamProcess = ProcessBuilder(commandList).redirectErrorStream(true).start()
+
+                    slipstreamReaderJob =
+                            launch {
+                                val reader =
+                                        BufferedReader(
+                                                InputStreamReader(
+                                                        slipstreamProcess?.inputStream
+                                                )
+                                        )
+                                try {
+                                    reader.forEachLine { line ->
+                                        Log.d(TAG, "[slipstream] $line")
+                                        if (line.contains(
+                                                        "ListenerBind_Init failed",
+                                                        ignoreCase = true
+                                                )
+                                        ) {
+                                            launch { handleError("Listener bind failed", line) }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.d(TAG, "Slipstream reader stopped: ${e.message}")
+                                }
+                            }
+
+                    delay(1000)
+                    if (slipstreamProcess?.isAlive != true) {
+                        handleError("Slipstream failed", "Process not alive after start")
+                        return
+                    }
+
+                    sendStatusUpdate("Running", "Waiting...")
+
+                    // Start SSH proxy if key is provided
+                    if (privateKeyPath.isNotBlank() && File(privateKeyPath).exists()) {
+                        val proxyCommand = listOf(proxyPath, privateKeyPath)
+                        Log.d(TAG, "Starting proxy: ${proxyCommand.joinToString(" ")}")
+
+                        proxyProcess =
+                                ProcessBuilder(proxyCommand).redirectErrorStream(true).start()
+
+                        proxyReaderJob =
+                                launch {
+                                    val reader =
+                                            BufferedReader(
+                                                    InputStreamReader(proxyProcess?.inputStream)
+                                            )
+                                    try {
+                                        reader.forEachLine { line ->
+                                            Log.d(TAG, "[proxy] $line")
+                                            if (line.contains("error", ignoreCase = true)) {
+                                                launch { handleError("Proxy error", line) }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.d(TAG, "Proxy reader stopped: ${e.message}")
+                                    }
+                                }
+
+                        delay(500)
+                        if (proxyProcess?.isAlive == true) {
+                            sendStatusUpdate("Running", "Running")
+                        } else {
+                            sendStatusUpdate("Running", "Failed")
                         }
+                    } else {
+                        Log.d(TAG, "No valid SSH key provided, skipping proxy")
+                        sendStatusUpdate("Running", "Stopped (No Key)")
                     }
 
-                    val success = executeCommands(slipstreamPath, proxyPath, resolvers, domainName)
-                    if (success && isActive) {
-                        tunnelMonitorJob = launch { startTunnelMonitor() }
-                    } else if (isActive) {
-                        Log.e(TAG, "Failed to start tunnel. Stopping service.")
-                        stopSelf()
-                    }
+                    startMonitoring()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error starting tunnel: ${e.message}", e)
+                    handleError("Slipstream failed", e.message ?: "Unknown error")
                 }
-            } finally {
-                isRestarting = false
             }
-        }
-    }
 
-    private suspend fun startTunnelMonitor() {
-        while (isActive) {
-            delay(MONITOR_INTERVAL_MS)
+    private suspend fun stopTunnel() =
+            tunnelMutex.withLock {
+                try {
+                    sendStatusUpdate("Stopping...", "Stopping...")
+                    tunnelMonitorJob?.cancel()
+                    slipstreamReaderJob?.cancel()
+                    proxyReaderJob?.cancel()
 
-            val slipstreamAlive = slipstreamProcess?.isAlive == true
-            val proxyAlive = proxyProcess?.isAlive == true
+                    proxyProcess?.destroy()
+                    proxyProcess?.waitFor()
+                    proxyProcess = null
 
-            if (!slipstreamAlive || !proxyAlive) {
-                if (isActive && !isRestarting) {
-                    Log.w(TAG, "Tunnel failure detected. Restarting...")
-                    launch { startTunnelSequence(resolversConfig, domainNameConfig) }
-                    break
+                    slipstreamProcess?.destroy()
+                    slipstreamProcess?.waitFor()
+                    slipstreamProcess = null
+
+                    sendStatusUpdate("Stopped", "Stopped")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping tunnel", e)
                 }
-            } else {
-                sendStatusUpdate("Running", "Running")
             }
-        }
-    }
 
-    private suspend fun executeCommands(
-            slipstreamPath: String,
-            proxyPath: String,
-            resolvers: ArrayList<String>,
-            domainName: String
-    ): Boolean {
-        // 1. Start Slipstream
-        val slipCommand =
-                mutableListOf(slipstreamPath, "--congestion-control=bbr", "--domain=$domainName")
-        resolvers.forEach {
-            slipCommand.add("--resolver=${if (it.contains(":")) it else "$it:53"}")
-        }
-
-        val slipResult =
-                startProcessWithOutputCheck(
-                        slipCommand,
-                        SLIPSTREAM_BINARY_NAME,
-                        5000L,
-                        "Connection confirmed."
-                )
-        slipstreamProcess = slipResult.second
-
-        if (slipResult.first.contains("Connection confirmed.")) {
-            slipstreamReaderJob = launch {
-                readProcessOutput(slipstreamProcess!!, SLIPSTREAM_BINARY_NAME)
-            }
-            sendStatusUpdate("Running", "Starting Proxy...")
-            delay(1000L)
-
-            // 2. Start Proxy Client
-            val proxyCommand = listOf(proxyPath, privateKeyPath, "127.0.0.1:5201", "127.0.0.1:3080")
-
-            // IMPORTANT: Passing null successMsg means we just check if it stays alive for 1.5
-            // seconds
-            val proxyResult =
-                    startProcessWithOutputCheck(proxyCommand, PROXY_CLIENT_BINARY_NAME, 1500L, null)
-            proxyProcess = proxyResult.second
-
-            if (proxyProcess?.isAlive == true) {
-                proxyReaderJob = launch {
-                    readProcessOutput(proxyProcess!!, PROXY_CLIENT_BINARY_NAME)
-                }
-                sendStatusUpdate("Running", "Running")
-                return true
-            } else {
-                Log.e(TAG, "Proxy client died immediately after start.")
-                sendErrorMessage("Proxy Client failed to start. Check key permissions.")
-            }
-        } else {
-            sendErrorMessage("Slipstream failed: ${slipResult.first}")
-        }
-        return false
-    }
-
-    private suspend fun startProcessWithOutputCheck(
-            command: List<String>,
-            logTag: String,
-            timeout: Long,
-            successMsg: String?
-    ): Pair<String, Process> {
-        return try {
-            val process = ProcessBuilder(command).redirectErrorStream(true).start()
-            val output = StringBuilder()
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-
-            val result =
-                    withTimeoutOrNull(timeout) {
+    private fun startMonitoring() {
+        tunnelMonitorJob?.cancel()
+        tunnelMonitorJob =
+                launch {
+                    try {
                         while (isActive) {
-                            if (reader.ready()) {
-                                val line = reader.readLine() ?: break
-                                output.append(line).append("\n")
-                                Log.d(TAG, "$logTag: $line")
-                                if (successMsg != null && line.contains(successMsg))
-                                        return@withTimeoutOrNull "SUCCESS"
-                            } else {
-                                delay(100)
+                            delay(MONITOR_INTERVAL_MS)
+                            if (slipstreamProcess?.isAlive == false) {
+                                handleError("Slipstream crashed", "Process terminated unexpectedly")
+                                break
                             }
                         }
-                        "TIMEOUT"
+                    } catch (e: CancellationException) {
+                        Log.d(TAG, "Monitor cancelled")
                     }
-
-            // If we aren't looking for a specific message, we just check if it crashed
-            val finalOutput =
-                    if (successMsg == null && process.isAlive) "Started"
-                    else output.toString().trim()
-            Pair(
-                    if (successMsg != null && result == "SUCCESS") successMsg else finalOutput,
-                    process
-            )
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Log.e(TAG, "Error starting $logTag: ${e.message}")
-            Pair("Error: ${e.message}", ProcessBuilder("echo").start())
-        }
-    }
-
-    private suspend fun readProcessOutput(process: Process, logTag: String) {
-        withContext(Dispatchers.IO) {
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            try {
-                while (isActive && process.isAlive) {
-                    val line = reader.readLine() ?: break
-                    Log.d(TAG, "$logTag Live: $line")
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Output Reader Error ($logTag): ${e.message}")
-            } finally {
-                try {
-                    reader.close()
-                } catch (e: Exception) {}
-            }
-        }
     }
 
-    private fun sendErrorMessage(msg: String) {
-        val intent = Intent(ACTION_ERROR).apply { putExtra(EXTRA_ERROR_MESSAGE, msg) }
+    private fun handleError(message: String, detail: String) {
+        Log.e(TAG, "Error: $message - $detail")
+        sendStatusUpdate("Failed: $message", "Stopped")
+        val intent =
+                Intent(ACTION_ERROR).apply {
+                    putExtra(EXTRA_ERROR_MESSAGE, message)
+                    putExtra(EXTRA_ERROR_OUTPUT, detail)
+                }
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+        launch { stopTunnel() }
+    }
+
+    private fun sendCurrentStatus(reason: String) {
+        val slipStatus =
+                if (slipstreamProcess?.isAlive == true) "Running" else "Stopped"
+        val sshStatus = if (proxyProcess?.isAlive == true) "Running" else "Stopped"
+        Log.d(TAG, "Status request ($reason): Slip=$slipStatus, SSH=$sshStatus")
+        sendStatusUpdate(slipStatus, sshStatus)
+    }
+
+    override fun onBind(intent: Intent?): IBinder? {
+        super.onBind(intent)
+        return null
+    }
+
+    override fun onDestroy() {
+        Log.d(TAG, "Service onDestroy")
+        job.cancel()
+        runBlocking { stopTunnel() }
+        super.onDestroy()
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val chan =
+            val channel =
                     NotificationChannel(
-                            NOTIFICATION_CHANNEL_ID,
-                            "Tunnel Service",
-                            NotificationManager.IMPORTANCE_LOW
-                    )
-            val service = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            service.createNotificationChannel(chan)
+                                    NOTIFICATION_CHANNEL_ID,
+                                    "Command Service",
+                                    NotificationManager.IMPORTANCE_LOW
+                            )
+                            .apply { description = "Background command execution" }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
         }
     }
 
-    private fun buildForegroundNotification(): Notification {
+    private fun createNotification(): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent =
                 PendingIntent.getActivity(
                         this,
                         0,
                         intent,
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                                PendingIntent.FLAG_IMMUTABLE
-                        else 0
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
-
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-                .setContentTitle("Tunnel Service")
-                .setContentText("Status: Active")
+                .setContentTitle("SlipstreamApp")
+                .setContentText("Running in background...")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .build()
@@ -343,13 +355,35 @@ class CommandService : LifecycleService(), CoroutineScope {
         val file = File(filesDir, name)
         return try {
             if (!file.exists()) {
+                Log.d(TAG, "Copying $name from assets to ${file.absolutePath}")
                 assets.open(name).use { input ->
                     file.outputStream().use { output -> input.copyTo(output) }
                 }
             }
-            file.setExecutable(true, false)
+            
+            // Set executable permissions using multiple methods
+            file.setExecutable(true, false) // Java method
+            file.setReadable(true, false)
+            file.setWritable(true, true)
+            
+            // Also try chmod as fallback
+            try {
+                Runtime.getRuntime().exec("chmod 755 ${file.absolutePath}").waitFor()
+                Log.d(TAG, "Set permissions for $name using chmod")
+            } catch (e: Exception) {
+                Log.w(TAG, "chmod failed for $name: ${e.message}")
+            }
+            
+            // Verify permissions
+            if (file.canExecute()) {
+                Log.d(TAG, "$name is executable")
+            } else {
+                Log.e(TAG, "$name is NOT executable after permission setting")
+            }
+            
             file.absolutePath
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy binary $name: ${e.message}", e)
             null
         }
     }
@@ -358,36 +392,8 @@ class CommandService : LifecycleService(), CoroutineScope {
         try {
             Runtime.getRuntime().exec(arrayOf("killall", "-9", SLIPSTREAM_BINARY_NAME)).waitFor()
             Runtime.getRuntime().exec(arrayOf("killall", "-9", PROXY_CLIENT_BINARY_NAME)).waitFor()
-        } catch (e: Exception) {}
-    }
-
-    private fun killProcess(p: Process?) {
-        try {
-            if (p?.isAlive == true) {
-                p.destroy()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) p.destroyForcibly()
-            }
-        } catch (e: Exception) {}
-    }
-
-    private fun stopBackgroundProcesses() {
-        killProcess(proxyProcess)
-        killProcess(slipstreamProcess)
-        proxyProcess = null
-        slipstreamProcess = null
-    }
-
-    override fun onBind(intent: Intent): IBinder? {
-        super.onBind(intent)
-        return null
-    }
-
-    override fun onDestroy() {
-        Log.d(TAG, "Service destroyed.")
-        mainExecutionJob?.cancel()
-        job.cancel()
-        mainHandler.removeCallbacksAndMessages(null)
-        stopBackgroundProcesses()
-        super.onDestroy()
+        } catch (e: Exception) {
+            Log.d(TAG, "Process cleanup: ${e.message}")
+        }
     }
 }
