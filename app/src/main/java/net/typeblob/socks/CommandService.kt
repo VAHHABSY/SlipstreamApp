@@ -69,6 +69,7 @@ class CommandService : Service() {
         
         scope.launch {
             try {
+                // Clean up any existing processes
                 log("[Service] Cleaning up old processes...")
                 val cleanup = killSlipstreamProcesses()
                 log("[Service] Cleanup exit: $cleanup")
@@ -76,6 +77,7 @@ class CommandService : Service() {
                 updateStatus(SlipstreamStatus.Starting("Cleaning up..."), SocksStatus.Waiting)
                 delay(500)
                 
+                // Start slipstream
                 startSlipstreamProcess(domain, resolvers, port)
                 delay(1000)
                 
@@ -111,26 +113,28 @@ class CommandService : Service() {
             
             log("[Service] Step 3: Binary exists: true")
             log("[Service] Step 4: Binary size: ${sourceFile.length()} bytes")
+            log("[Service] Step 5: Binary executable: ${sourceFile.canExecute()}")
             
-            // Destination: App's private files directory
+            // Destination: App's private files directory (executable location)
             val destFile = File(filesDir, "slipstream-client")
             
             // Copy binary to writable location
             if (!destFile.exists() || sourceFile.length() != destFile.length()) {
-                log("[Service] Step 5: Copying binary to ${destFile.absolutePath}")
+                log("[Service] Step 6: Copying binary to ${filesDir.absolutePath}/slipstream-client")
                 sourceFile.inputStream().use { input ->
                     destFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
-                log("[Service] Step 6: Copy completed (${destFile.length()} bytes)")
+                log("[Service] Step 7: Copy completed (${destFile.length()} bytes)")
             } else {
-                log("[Service] Step 5: Binary already exists in private directory")
+                log("[Service] Step 6: Binary already exists in private directory")
             }
             
             // Make executable
-            val execResult = destFile.setExecutable(true, false)
-            log("[Service] Step 6: Made binary executable: $execResult")
+            destFile.setExecutable(true, false)
+            destFile.setReadable(true, false)
+            log("[Service] Step 7: Made binary executable")
             
             val command = listOf(
                 destFile.absolutePath,
@@ -140,8 +144,8 @@ class CommandService : Service() {
                 port.toString()
             )
             
-            log("[Service] Step 7: Command: ${command.joinToString(" ")}")
-            log("[Service] Step 8: Working dir: ${filesDir.absolutePath}")
+            log("[Service] Step 8: Command: ${command.joinToString(" ")}")
+            log("[Service] Step 9: Working dir: ${filesDir.absolutePath}")
             
             val processBuilder = ProcessBuilder(command)
                 .directory(filesDir)
@@ -150,13 +154,12 @@ class CommandService : Service() {
             // Set library path
             val env = processBuilder.environment()
             env["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
-            log("[Service] Step 9: LD_LIBRARY_PATH set to: ${applicationInfo.nativeLibraryDir}")
             
             log("[Service] Step 10: Starting process...")
             
             slipstreamProcess = processBuilder.start()
             
-            log("[Service] Step 11: Process started successfully")
+            log("[Service] Step 11: Process started with PID: ${slipstreamProcess?.pid()}")
             
             // Start monitoring
             startOutputMonitoring()

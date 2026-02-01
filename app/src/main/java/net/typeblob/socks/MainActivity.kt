@@ -492,6 +492,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Extension functions for Status display
 fun SlipstreamStatus.toDisplayString(): String = when (this) {
     is SlipstreamStatus.Stopped -> "Stopped"
     is SlipstreamStatus.Starting -> message
