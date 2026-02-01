@@ -129,8 +129,8 @@ class CommandService : LifecycleService(), CoroutineScope {
                 }
 
                 try {
-                    broadcastLog("Step 1: Copying binary to files dir")
-                    val slipstreamPath = copyBinaryToFilesDir(SLIPSTREAM_BINARY_NAME)
+                    broadcastLog("Step 1: Copying binary to cache dir")
+                    val slipstreamPath = copyBinaryToCacheDir(SLIPSTREAM_BINARY_NAME)
 
                     if (slipstreamPath == null) {
                         handleError("Binary setup failed", "Could not copy slipstream binary")
@@ -168,11 +168,10 @@ class CommandService : LifecycleService(), CoroutineScope {
                     commandList.add(socks5Port)
 
                     broadcastLog("Step 7: Command: ${commandList.joinToString(" ")}")
-                    broadcastLog("Step 8: Working dir: ${filesDir.absolutePath}")
+                    broadcastLog("Step 8: Starting process from cache dir...")
 
                     slipstreamProcess = ProcessBuilder(commandList)
                             .redirectErrorStream(true)
-                            .directory(filesDir)
                             .start()
 
                     broadcastLog("Step 9: Process started, alive: ${slipstreamProcess?.isAlive}")
@@ -348,38 +347,71 @@ class CommandService : LifecycleService(), CoroutineScope {
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 
-    private fun copyBinaryToFilesDir(name: String): String? {
-        val file = File(filesDir, name)
+    private fun copyBinaryToCacheDir(name: String): String? {
+        // Use cacheDir instead of filesDir - cacheDir doesn't have noexec mount option
+        val file = File(cacheDir, name)
         return try {
-            if (!file.exists()) {
-                broadcastLog("Binary not in filesDir, copying from assets...")
-                assets.open(name).use { input ->
-                    file.outputStream().use { output -> 
-                        val bytes = input.copyTo(output)
-                        broadcastLog("Copied $bytes bytes from assets")
-                    }
+            // Always recopy to ensure fresh binary with correct permissions
+            if (file.exists()) {
+                broadcastLog("Deleting existing binary in cache...")
+                file.delete()
+            }
+            
+            broadcastLog("Copying binary from assets to cache dir...")
+            assets.open(name).use { input ->
+                file.outputStream().use { output -> 
+                    val bytes = input.copyTo(output)
+                    broadcastLog("Copied $bytes bytes from assets")
                 }
-            } else {
-                broadcastLog("Binary exists, size: ${file.length()} bytes")
             }
             
             broadcastLog("Setting executable permissions...")
+            
+            // Set permissions using Java API
             file.setExecutable(true, false)
             file.setReadable(true, false)
             file.setWritable(true, true)
             
+            // Also try chmod as backup
             try {
-                val chmodProcess = Runtime.getRuntime().exec("chmod 755 ${file.absolutePath}")
+                val chmodProcess = Runtime.getRuntime().exec(arrayOf("chmod", "755", file.absolutePath))
                 val exitCode = chmodProcess.waitFor()
                 broadcastLog("chmod exit: $exitCode")
+                
+                // Read chmod output if any
+                val output = chmodProcess.inputStream.bufferedReader().readText()
+                if (output.isNotEmpty()) {
+                    broadcastLog("chmod output: $output")
+                }
+                val error = chmodProcess.errorStream.bufferedReader().readText()
+                if (error.isNotEmpty()) {
+                    broadcastLog("chmod error: $error", isError = true)
+                }
             } catch (e: Exception) {
                 broadcastLog("chmod failed: ${e.message}", isError = true)
             }
             
+            // Verify file permissions
             if (file.canExecute()) {
                 broadcastLog("$name is executable ✓")
             } else {
                 broadcastLog("$name NOT executable ✗", isError = true)
+                
+                // Try one more time with absolute chmod path
+                try {
+                    broadcastLog("Trying /system/bin/chmod...")
+                    val chmodProcess2 = Runtime.getRuntime().exec(arrayOf("/system/bin/chmod", "777", file.absolutePath))
+                    val exitCode2 = chmodProcess2.waitFor()
+                    broadcastLog("chmod777 exit: $exitCode2")
+                    
+                    if (file.canExecute()) {
+                        broadcastLog("Success after chmod 777 ✓")
+                    } else {
+                        broadcastLog("Still not executable after chmod 777 ✗", isError = true)
+                    }
+                } catch (e2: Exception) {
+                    broadcastLog("chmod 777 failed: ${e2.message}", isError = true)
+                }
             }
             
             file.absolutePath
