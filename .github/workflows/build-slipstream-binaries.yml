@@ -11,12 +11,34 @@ jobs:
   build-slipstream:
     name: Build Slipstream Binaries
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    strategy:
+      matrix:
+        target:
+          - rust_triple: aarch64-linux-android
+            ndk_triple: aarch64-linux-android
+            abi: arm64-v8a
+            api: 33
+          - rust_triple: armv7-linux-androideabi
+            ndk_triple: armv7a-linux-androideabi
+            abi: armeabi-v7a
+            api: 33
+          - rust_triple: x86_64-linux-android
+            ndk_triple: x86_64-linux-android
+            abi: x86_64
+            api: 33
+          - rust_triple: i686-linux-android
+            ndk_triple: i686-linux-android
+            abi: x86
+            api: 33
 
     steps:
       - name: Checkout your SlipstreamApp repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Checkout slipstream-plugin-android
         uses: actions/checkout@v4
@@ -28,215 +50,194 @@ jobs:
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r27.2.12479018
+          ndk-version: r26c
           add-to-path: true
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
+          targets: ${{ matrix.target.rust_triple }}
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 perl pkg-config
+          sudo apt-get install -y cmake ninja-build python3 perl pkg-config libssl-dev
 
-      - name: Cache Cargo registry
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('slipstream-plugin-android/**/Cargo.lock') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            slipstream-plugin-android/app/src/main/rust/slipstream-rust/target
+          key: ${{ runner.os }}-cargo-${{ matrix.target.abi }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Cache Cargo build
-        uses: actions/cache@v4
+      - name: Set build environment for ${{ matrix.target.abi }}
+        run: |
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          CC_PATH="${NDK_TOOLCHAIN}/bin/${{ matrix.target.ndk_triple }}${{ matrix.target.api }}-clang"
+          CXX_PATH="${NDK_TOOLCHAIN}/bin/${{ matrix.target.ndk_triple }}${{ matrix.target.api }}-clang++"
+          AR_PATH="${NDK_TOOLCHAIN}/bin/llvm-ar"
+          RANLIB_PATH="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
+          
+          TARGET_UPPER=$(echo "${{ matrix.target.rust_triple }}" | tr '[:lower:]-' '[:upper:]_')
+          
+          echo "CARGO_TARGET_${TARGET_UPPER}_LINKER=${CC_PATH}" >> $GITHUB_ENV
+          echo "CC_${{ matrix.target.rust_triple }}=${CC_PATH}" >> $GITHUB_ENV
+          echo "CXX_${{ matrix.target.rust_triple }}=${CXX_PATH}" >> $GITHUB_ENV
+          echo "AR_${{ matrix.target.rust_triple }}=${AR_PATH}" >> $GITHUB_ENV
+          echo "RANLIB_${{ matrix.target.rust_triple }}=${RANLIB_PATH}" >> $GITHUB_ENV
+          echo "CC=${CC_PATH}" >> $GITHUB_ENV
+          echo "CXX=${CXX_PATH}" >> $GITHUB_ENV
+          echo "AR=${AR_PATH}" >> $GITHUB_ENV
+          echo "RANLIB=${RANLIB_PATH}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          echo "ANDROID_ABI=${{ matrix.target.abi }}" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=android-${{ matrix.target.api }}" >> $GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+          echo "OPENSSL_ROOT_DIR=/usr" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
+          echo "OPENSSL_CRYPTO_LIBRARY=/usr/lib/x86_64-linux-gnu/libcrypto.so" >> $GITHUB_ENV
+          echo "OPENSSL_SSL_LIBRARY=/usr/lib/x86_64-linux-gnu/libssl.so" >> $GITHUB_ENV
+          echo "BUILD_TESTING=OFF" >> $GITHUB_ENV
+
+      - name: Build slipstream-client for ${{ matrix.target.abi }}
+        working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
+        run: |
+          cargo build \
+            --release \
+            --target ${{ matrix.target.rust_triple }} \
+            --bin slipstream-client \
+            --features openssl-vendored,picoquic-minimal-build
+
+      - name: Verify binary
+        working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
+        run: |
+          BINARY="target/${{ matrix.target.rust_triple }}/release/slipstream-client"
+          ls -lh "$BINARY"
+          file "$BINARY"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('slipstream-plugin-android/**/Cargo.lock') }}
+          name: slipstream-${{ matrix.target.abi }}
+          path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${{ matrix.target.rust_triple }}/release/slipstream-client
+          retention-days: 1
 
-      - name: Build Slipstream binaries
-        working-directory: slipstream-plugin-android
-        run: |
-          chmod +x gradlew
-          
-          echo "=== Starting Rust build for Android ==="
-          ./gradlew cargoBuild
-          
-          echo ""
-          echo "=== Build completed ==="
-          echo "Checking for built binaries..."
-          find app/src/main/rust/slipstream-rust/target -name "slipstream-client" -type f
+  package-and-commit:
+    name: Package and Commit Binaries
+    needs: build-slipstream
+    runs-on: ubuntu-latest
 
-      - name: Create jniLibs directory structure
-        run: |
-          mkdir -p app/src/main/jniLibs/arm64-v8a
-          mkdir -p app/src/main/jniLibs/armeabi-v7a
-          mkdir -p app/src/main/jniLibs/x86_64
-          mkdir -p app/src/main/jniLibs/x86
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Copy and process binaries
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Setup Android NDK (for strip tool)
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26c
+          add-to-path: true
+
+      - name: Organize binaries into jniLibs
         run: |
-          echo "=== Copying binaries to jniLibs ==="
+          mkdir -p app/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64,x86}
           
-          # Function to copy binary (try release first, fall back to debug)
-          copy_binary() {
-            local target=$1
-            local abi=$2
-            
-            if [ -f "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/release/slipstream-client" ]; then
-              cp "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/release/slipstream-client" \
-                 "app/src/main/jniLibs/${abi}/libslipstream.so"
-              echo "✓ Copied ${abi} (release)"
-            elif [ -f "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/debug/slipstream-client" ]; then
-              cp "slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${target}/debug/slipstream-client" \
-                 "app/src/main/jniLibs/${abi}/libslipstream.so"
-              echo "✓ Copied ${abi} (debug)"
-            else
-              echo "✗ Failed to find ${abi} binary"
-              return 1
-            fi
-          }
+          cp binaries/slipstream-arm64-v8a/slipstream-client app/src/main/jniLibs/arm64-v8a/libslipstream.so
+          cp binaries/slipstream-armeabi-v7a/slipstream-client app/src/main/jniLibs/armeabi-v7a/libslipstream.so
+          cp binaries/slipstream-x86_64/slipstream-client app/src/main/jniLibs/x86_64/libslipstream.so
+          cp binaries/slipstream-x86/slipstream-client app/src/main/jniLibs/x86/libslipstream.so
           
-          copy_binary "aarch64-linux-android" "arm64-v8a"
-          copy_binary "armv7-linux-androideabi" "armeabi-v7a"
-          copy_binary "x86_64-linux-android" "x86_64"
-          copy_binary "i686-linux-android" "x86"
+          echo "✓ All binaries copied"
+
+      - name: Strip binaries
+        run: |
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
           
-          echo ""
-          echo "=== Stripping debug symbols ==="
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-              $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
-                "app/src/main/jniLibs/${abi}/libslipstream.so"
-              echo "✓ Stripped ${abi}"
-            fi
+            SIZE_BEFORE=$(stat -c%s "app/src/main/jniLibs/${abi}/libslipstream.so")
+            "$STRIP" "app/src/main/jniLibs/${abi}/libslipstream.so"
+            SIZE_AFTER=$(stat -c%s "app/src/main/jniLibs/${abi}/libslipstream.so")
+            echo "✓ Stripped ${abi}: $(numfmt --to=iec $SIZE_BEFORE) → $(numfmt --to=iec $SIZE_AFTER)"
           done
 
-      - name: Verify binaries
-        run: |
-          echo "=== Binary Information ==="
-          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-              echo ""
-              echo "Architecture: ${abi}"
-              file "app/src/main/jniLibs/${abi}/libslipstream.so"
-              ls -lh "app/src/main/jniLibs/${abi}/libslipstream.so"
-            fi
-          done
-
-      - name: Create/Update README in jniLibs
+      - name: Create README
         run: |
           cat > app/src/main/jniLibs/README.md << 'EOF'
           # Slipstream Android Native Libraries
           
-          These binaries are automatically built from: https://github.com/Mygod/slipstream-plugin-android
+          Built from: https://github.com/Mygod/slipstream-plugin-android
           
-          ## Build Information
+          ## Binary Sizes
           
           EOF
-          
+          echo '```' >> app/src/main/jniLibs/README.md
+          ls -lh app/src/main/jniLibs/*/*.so >> app/src/main/jniLibs/README.md
+          echo '```' >> app/src/main/jniLibs/README.md
+          echo "" >> app/src/main/jniLibs/README.md
           echo "Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> app/src/main/jniLibs/README.md
-          echo "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> app/src/main/jniLibs/README.md
-          echo "" >> app/src/main/jniLibs/README.md
-          echo "## Binary Sizes" >> app/src/main/jniLibs/README.md
-          echo '```' >> app/src/main/jniLibs/README.md
-          ls -lh app/src/main/jniLibs/*/*.so 2>/dev/null >> app/src/main/jniLibs/README.md || echo "No binaries found" >> app/src/main/jniLibs/README.md
-          echo '```' >> app/src/main/jniLibs/README.md
-          
-          echo "" >> app/src/main/jniLibs/README.md
-          cat >> app/src/main/jniLibs/README.md << 'EOF'
-          
-          ## Usage in Your App
-          
-          The binaries are automatically loaded by Android from the correct architecture folder.
-          
-          ```kotlin
-          val nativeLibDir = applicationInfo.nativeLibraryDir
-          val binaryPath = File(nativeLibDir, "libslipstream.so").absolutePath
-          
-          val process = ProcessBuilder(
-              binaryPath,
-              "domain.com",
-              "1.1.1.1",
-              "--socks-port",
-              "1081"
-          ).start()
-          ```
-          EOF
-          
-          cat app/src/main/jniLibs/README.md
 
-      - name: Check for changes
-        id: git-check
+      - name: Create Pull Request with binaries
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            🤖 Update slipstream Android binaries
+            
+            Built on: $(date -u)
+            Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          branch: update-slipstream-binaries
+          delete-branch: true
+          title: '🤖 Update Slipstream Android Binaries'
+          body: |
+            ## Automated Binary Update
+            
+            This PR updates the slipstream Android native binaries for all architectures.
+            
+            **Source:** https://github.com/Mygod/slipstream-plugin-android
+            **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            **Built on:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            
+            ### ✅ Architectures Included
+            - arm64-v8a
+            - armeabi-v7a
+            - x86_64
+            - x86
+            
+            ### 📦 Files Added/Updated
+            - `app/src/main/jniLibs/arm64-v8a/libslipstream.so`
+            - `app/src/main/jniLibs/armeabi-v7a/libslipstream.so`
+            - `app/src/main/jniLibs/x86_64/libslipstream.so`
+            - `app/src/main/jniLibs/x86/libslipstream.so`
+            - `app/src/main/jniLibs/README.md`
+            
+            Review and merge this PR to update the binaries in your app.
+          labels: |
+            automated
+            dependencies
+            native-libs
+
+      - name: Create ZIP archive
         run: |
-          git diff --quiet app/src/main/jniLibs/ || echo "changes=true" >> $GITHUB_OUTPUT
-          
-          if [ -n "$(git status --porcelain app/src/main/jniLibs/)" ]; then
-            echo "Changes detected in jniLibs"
-            git status app/src/main/jniLibs/
-          else
-            echo "No changes in jniLibs"
-          fi
+          cd app/src/main
+          zip -r ../../../slipstream-android-jniLibs.zip jniLibs/
+          cd ../../..
+          sha256sum slipstream-android-jniLibs.zip > slipstream-android-jniLibs.zip.sha256
 
-      - name: Commit and push binaries
-        if: steps.git-check.outputs.changes == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add app/src/main/jniLibs/
-          git commit -m "🤖 Auto-update slipstream binaries
-
-          - Built from Mygod/slipstream-plugin-android
-          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          - Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          
-          git push
-
-      - name: Create backup archive
-        run: |
-          zip -r slipstream-binaries-backup.zip app/src/main/jniLibs/
-          sha256sum slipstream-binaries-backup.zip > slipstream-binaries-backup.zip.sha256
-
-      - name: Upload backup artifacts
+      - name: Upload final package
         uses: actions/upload-artifact@v4
         with:
-          name: slipstream-binaries-backup
+          name: slipstream-android-jniLibs
           path: |
-            slipstream-binaries-backup.zip
-            slipstream-binaries-backup.zip.sha256
-          retention-days: 30
-
-      - name: Summary
-        run: |
-          echo "## ✅ Slipstream Binaries Built Successfully" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Binary Information" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Architecture | Size | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------------|------|--------|" >> $GITHUB_STEP_SUMMARY
-          
-          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            if [ -f "app/src/main/jniLibs/${abi}/libslipstream.so" ]; then
-              size=$(ls -lh "app/src/main/jniLibs/${abi}/libslipstream.so" | awk '{print $5}')
-              echo "| ${abi} | ${size} | ✅ Built |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "| ${abi} | - | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.git-check.outputs.changes }}" == "true" ]; then
-            echo "### 🎉 Binaries committed to repository" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The binaries have been automatically committed to \`app/src/main/jniLibs/\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ℹ️ No changes detected" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The binaries are identical to the existing ones." >> $GITHUB_STEP_SUMMARY
-          fi
+            slipstream-android-jniLibs.zip
+            slipstream-android-jniLibs.zip.sha256
+          retention-days: 90
