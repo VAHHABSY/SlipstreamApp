@@ -82,7 +82,7 @@
             android:text="+ Add Resolver"
             android:layout_marginBottom="16dp" />
 
-        <!-- SOCKS5 Port Input -->
+        <!-- SOCKS5 Port Input (REPLACES SSH Key Input) -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -96,6 +96,7 @@
             android:layout_height="wrap_content"
             android:hint="1080"
             android:inputType="number"
+            android:text="1080"
             android:layout_marginBottom="16dp" />
 
         <!-- Status Section -->
