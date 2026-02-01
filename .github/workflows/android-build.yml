@@ -28,6 +28,9 @@ jobs:
       run: |
         echo "y" | sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
         echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.0.12077973" >> $GITHUB_ENV
+    
+    - name: Make gradlew executable
+      run: chmod +x gradlew
         
     - name: Verify prebuilt libraries exist
       run: |
@@ -46,18 +49,22 @@ jobs:
     - name: Copy built libraries to jniLibs
       run: |
         echo "Copying NDK-built libraries to jniLibs (preserving prebuilts)..."
-        cp -n app/src/main/libs/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/ || true
-        cp -n app/src/main/libs/armeabi-v7a/*.so app/src/main/jniLibs/armeabi-v7a/ || true
-        cp -n app/src/main/libs/x86/*.so app/src/main/jniLibs/x86/ || true
-        cp -n app/src/main/libs/x86_64/*.so app/src/main/jniLibs/x86_64/ || true
+        mkdir -p app/src/main/jniLibs/arm64-v8a
+        mkdir -p app/src/main/jniLibs/armeabi-v7a
+        mkdir -p app/src/main/jniLibs/x86
+        mkdir -p app/src/main/jniLibs/x86_64
+        cp -n app/src/main/libs/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
+        cp -n app/src/main/libs/armeabi-v7a/*.so app/src/main/jniLibs/armeabi-v7a/ 2>/dev/null || true
+        cp -n app/src/main/libs/x86/*.so app/src/main/jniLibs/x86/ 2>/dev/null || true
+        cp -n app/src/main/libs/x86_64/*.so app/src/main/jniLibs/x86_64/ 2>/dev/null || true
         echo "Final jniLibs contents:"
         ls -la app/src/main/jniLibs/arm64-v8a/
         
     - name: Build Debug APK
-      run: ./gradlew assembleDebug --stacktrace
+      run: ./gradlew assembleDebug --stacktrace --no-daemon
         
     - name: Build Release APK
-      run: ./gradlew assembleRelease --stacktrace
+      run: ./gradlew assembleRelease --stacktrace --no-daemon
         
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
