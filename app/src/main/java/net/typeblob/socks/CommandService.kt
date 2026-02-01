@@ -159,7 +159,7 @@ class CommandService : Service() {
             
             slipstreamProcess = processBuilder.start()
             
-            log("[Service] Step 11: Process started with PID: ${slipstreamProcess?.pid()}")
+            log("[Service] Step 11: Process started with hash: ${slipstreamProcess?.hashCode()}")
             
             // Start monitoring
             startOutputMonitoring()
