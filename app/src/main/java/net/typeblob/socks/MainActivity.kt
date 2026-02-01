@@ -82,6 +82,11 @@ class MainActivity : AppCompatActivity() {
                             )
                             addLog("ERROR: $message", isError = true)
                         }
+                        CommandService.ACTION_LOG -> {
+                            val logMessage = intent.getStringExtra(CommandService.EXTRA_LOG_MESSAGE) ?: ""
+                            val isError = intent.getBooleanExtra(CommandService.EXTRA_LOG_IS_ERROR, false)
+                            addLog("[Service] $logMessage", isError = isError)
+                        }
                     }
                 }
             }
@@ -165,6 +170,7 @@ class MainActivity : AppCompatActivity() {
                 IntentFilter().apply {
                     addAction(CommandService.ACTION_STATUS_UPDATE)
                     addAction(CommandService.ACTION_ERROR)
+                    addAction(CommandService.ACTION_LOG)
                 }
         LocalBroadcastManager.getInstance(this).registerReceiver(statusReceiver, filter)
     }
