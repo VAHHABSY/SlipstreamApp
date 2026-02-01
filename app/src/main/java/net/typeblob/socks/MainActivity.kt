@@ -1,485 +1,578 @@
 package net.typeblob.socks
 
 import android.Manifest
-import android.content.*
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.text.InputType
-import android.text.method.ScrollingMovementMethod
-import android.view.View
-import android.view.ViewGroup
-import android.widget.*
+import android.os.IBinder
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.ArrayList
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var resolversContainer: LinearLayout
-    private lateinit var addResolverButton: Button
-    private lateinit var domainInput: EditText
-    private lateinit var socks5PortInput: EditText
-    private lateinit var tunnelSwitch: Switch
-    private lateinit var profileSpinner: Spinner
-    private lateinit var addProfileButton: ImageButton
-    private lateinit var deleteProfileButton: ImageButton
-
-    private lateinit var slipstreamStatusIndicator: TextView
-    private lateinit var slipstreamStatusText: TextView
-    private lateinit var socks5StatusIndicator: TextView
-    private lateinit var socks5StatusText: TextView
+class MainActivity : ComponentActivity() {
+    private var commandService: CommandService? = null
+    private var serviceBound = false
     
-    private lateinit var logScrollView: ScrollView
-    private lateinit var logTextView: TextView
-    private lateinit var clearLogButton: Button
-    private lateinit var copyLogButton: Button
-    private val logBuilder = StringBuilder()
-    private val maxLogLines = 200
-
-    private lateinit var sharedPreferences: SharedPreferences
-    private var isUpdatingSwitch = false
-    private var isSwitchingProfile = false
-
-    private var lastSelectedPosition: Int = 0
-
-    private val PREF_PROFILES_SET = "pref_profiles_set"
-    private val PREF_LAST_PROFILE = "pref_last_profile"
-    private val IP_SEPARATOR = "|"
-
-    private var profileList = mutableListOf<String>()
-    private lateinit var profileAdapter: ArrayAdapter<String>
-
-    private val statusReceiver =
-            object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    when (intent?.action) {
-                        CommandService.ACTION_STATUS_UPDATE -> {
-                            val slipstreamStatus =
-                                    intent.getStringExtra(CommandService.EXTRA_STATUS_SLIPSTREAM)
-                            val socksStatus = intent.getStringExtra(CommandService.EXTRA_STATUS_SOCKS5)
-                            updateStatusUI(slipstreamStatus, socksStatus)
-                            addLog("Status: Slipstream=$slipstreamStatus, SOCKS5=$socksStatus")
-                        }
-                        CommandService.ACTION_ERROR -> {
-                            val message =
-                                    intent.getStringExtra(CommandService.EXTRA_ERROR_MESSAGE)
-                                            ?: "Unknown Error"
-                            Toast.makeText(this@MainActivity, "ERROR: $message", Toast.LENGTH_LONG)
-                                    .show()
-                            updateStatusUI(
-                                    slipstreamStatus = "Failed: $message",
-                                    socksStatus = "Stopped"
-                            )
-                            addLog("ERROR: $message", isError = true)
-                        }
-                        CommandService.ACTION_LOG -> {
-                            val logMessage = intent.getStringExtra(CommandService.EXTRA_LOG_MESSAGE) ?: ""
-                            val isError = intent.getBooleanExtra(CommandService.EXTRA_LOG_IS_ERROR, false)
-                            addLog("[Service] $logMessage", isError = isError)
-                        }
-                    }
-                }
+    private val slipstreamStatus = mutableStateOf<SlipstreamStatus>(SlipstreamStatus.Stopped)
+    private val socksStatus = mutableStateOf<SocksStatus>(SocksStatus.Stopped)
+    private val logMessages = mutableStateListOf<String>()
+    
+    private val profiles = mutableStateListOf(
+        Profile("Default", "example.com", "1.1.1.1", 1081, isActive = true)
+    )
+    private val currentProfile = mutableStateOf(profiles.first())
+    
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as CommandService.LocalBinder
+            commandService = binder.getService()
+            serviceBound = true
+            
+            commandService?.setStatusCallback { slipstream, socks ->
+                slipstreamStatus.value = slipstream
+                socksStatus.value = socks
             }
-
-    private val requestNotificationPermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                if (isGranted && tunnelSwitch.isChecked) {
-                    startCommandService()
-                    addLog("Notification permission granted")
-                } else if (!isGranted) {
-                    syncSwitchState(false)
-                    addLog("Notification permission denied", isError = true)
-                }
+            
+            commandService?.setLogCallback { message ->
+                logMessages.add(message)
             }
-
+            
+            log("Connected to service")
+        }
+        
+        override fun onServiceDisconnected(name: ComponentName?) {
+            commandService = null
+            serviceBound = false
+            log("Disconnected from service")
+        }
+    }
+    
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            log("Notification permission granted")
+        } else {
+            log("Notification permission denied")
+            Toast.makeText(this, "Notification permission is required", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        sharedPreferences = getSharedPreferences("SlipstreamPrefs", Context.MODE_PRIVATE)
-
-        resolversContainer = findViewById(R.id.resolvers_container)
-        addResolverButton = findViewById(R.id.add_resolver_button)
-        domainInput = findViewById(R.id.domain_input)
-        socks5PortInput = findViewById(R.id.socks5_port_input)
-        tunnelSwitch = findViewById(R.id.tunnel_switch)
-        profileSpinner = findViewById(R.id.profile_spinner)
-        addProfileButton = findViewById(R.id.add_profile_button)
-        deleteProfileButton = findViewById(R.id.delete_profile_button)
-
-        slipstreamStatusIndicator = findViewById(R.id.slipstream_status_indicator)
-        slipstreamStatusText = findViewById(R.id.slipstream_status_text)
-        socks5StatusIndicator = findViewById(R.id.socks5_status_indicator)
-        socks5StatusText = findViewById(R.id.socks5_status_text)
         
-        logScrollView = findViewById(R.id.log_scroll_view)
-        logTextView = findViewById(R.id.log_text_view)
-        clearLogButton = findViewById(R.id.clear_log_button)
-        copyLogButton = findViewById(R.id.copy_log_button)
-        
-        // Enable scrolling and text selection
-        logTextView.movementMethod = ScrollingMovementMethod()
-        logTextView.setTextIsSelectable(true)
-        
-        clearLogButton.setOnClickListener { 
-            clearLog()
-        }
-        
-        copyLogButton.setOnClickListener {
-            copyLogsToClipboard()
-        }
-
-        setupProfiles()
-        
-        addLog("SlipstreamApp started - SOCKS5 mode (No VPN)")
-
-        addResolverButton.setOnClickListener { addResolverInput("", true) }
-        addProfileButton.setOnClickListener { showAddProfileDialog() }
-        deleteProfileButton.setOnClickListener { deleteCurrentProfile() }
-
-        tunnelSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (isUpdatingSwitch) return@setOnCheckedChangeListener
-
-            val currentProfile = profileSpinner.selectedItem?.toString()
-            if (currentProfile != null) {
-                saveProfileData(currentProfile)
-            }
-
-            if (isChecked) {
-                addLog("Starting SOCKS5 proxy service...")
-                checkPermissionsAndStartService()
-            } else {
-                addLog("Stopping SOCKS5 proxy service...")
-                stopService(Intent(this, CommandService::class.java))
-                updateStatusUI("Stopped", "Stopped")
-            }
-        }
-
-        val filter =
-                IntentFilter().apply {
-                    addAction(CommandService.ACTION_STATUS_UPDATE)
-                    addAction(CommandService.ACTION_ERROR)
-                    addAction(CommandService.ACTION_LOG)
-                }
-        LocalBroadcastManager.getInstance(this).registerReceiver(statusReceiver, filter)
-    }
-    
-    private fun addLog(message: String, isError: Boolean = false) {
-        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val prefix = if (isError) "❌" else "ℹ️"
-        val logLine = "[$timestamp] $prefix $message\n"
-        
-        logBuilder.append(logLine)
-        
-        val lines = logBuilder.lines()
-        if (lines.size > maxLogLines) {
-            logBuilder.clear()
-            logBuilder.append(lines.takeLast(maxLogLines).joinToString("\n"))
-        }
-        
-        runOnUiThread {
-            logTextView.text = logBuilder.toString()
-            // Auto-scroll to bottom
-            logScrollView.post {
-                logScrollView.fullScroll(View.FOCUS_DOWN)
-            }
-        }
-    }
-    
-    private fun clearLog() {
-        logBuilder.clear()
-        logTextView.text = ""
-        addLog("Log cleared")
-    }
-    
-    private fun copyLogsToClipboard() {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("SlipstreamApp Logs", logBuilder.toString())
-        clipboard.setPrimaryClip(clip)
-        Toast.makeText(this, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
-        addLog("Logs copied to clipboard")
-    }
-
-    private fun checkPermissionsAndStartService() {
+        // Request notification permission for Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
-                            PackageManager.PERMISSION_GRANTED
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
             ) {
-                startCommandService()
-            } else {
-                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-        } else {
-            startCommandService()
+        }
+        
+        // Load saved profiles
+        loadProfiles()
+        
+        setContent {
+            MaterialTheme {
+                MainScreen()
+            }
         }
     }
-
-    private fun setupProfiles() {
-        val savedProfiles =
-                sharedPreferences.getStringSet(PREF_PROFILES_SET, setOf("Default"))?.toMutableList()
-                        ?: mutableListOf("Default")
-        profileList.clear()
-        profileList.addAll(savedProfiles.sorted())
-
-        profileAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, profileList)
-        profileAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        profileSpinner.adapter = profileAdapter
-
-        val lastProfile = sharedPreferences.getString(PREF_LAST_PROFILE, "Default")
-        val lastIndex = profileList.indexOf(lastProfile).let { if (it == -1) 0 else it }
-
-        lastSelectedPosition = lastIndex
-        profileSpinner.setSelection(lastIndex)
-        loadProfileData(profileList[lastIndex])
-
-        profileSpinner.onItemSelectedListener =
-                object : AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(
-                            parent: AdapterView<*>?,
-                            view: View?,
-                            position: Int,
-                            id: Long
-                    ) {
-                        if (isSwitchingProfile) return
-                        val oldProfileName = profileList[lastSelectedPosition]
-                        saveProfileData(oldProfileName)
-                        loadProfileData(profileList[position])
-                        lastSelectedPosition = position
-                        sharedPreferences
-                                .edit()
-                                .putString(PREF_LAST_PROFILE, profileList[position])
-                                .apply()
-                        addLog("Switched to profile: ${profileList[position]}")
-                    }
-                    override fun onNothingSelected(parent: AdapterView<*>?) {}
-                }
-    }
-
-    private fun loadProfileData(profileName: String) {
-        isSwitchingProfile = true
-        resolversContainer.removeAllViews()
-
-        val ips = sharedPreferences.getString("profile_${profileName}_ips", "1.1.1.1")
-        val domain = sharedPreferences.getString("profile_${profileName}_domain", "")
-        val socks5Port = sharedPreferences.getString("profile_${profileName}_socks5_port", "1080")
-
-        socks5PortInput.setText(socks5Port)
-        domainInput.setText(domain)
-        val ipList = ips?.split(IP_SEPARATOR)?.filter { it.isNotBlank() } ?: listOf("1.1.1.1")
-
-        ipList.forEachIndexed { index, ip -> addResolverInput(ip, index > 0) }
-        isSwitchingProfile = false
-        addLog("Loaded profile: $profileName")
-    }
-
-    private fun saveProfileData(profileName: String) {
-        val ipList = getIpListFromUI()
-        sharedPreferences.edit().apply {
-            putString("profile_${profileName}_ips", ipList.joinToString(IP_SEPARATOR))
-            putString("profile_${profileName}_domain", domainInput.text.toString().trim())
-            putString("profile_${profileName}_socks5_port", socks5PortInput.text.toString().trim())
-            apply()
+    
+    override fun onStart() {
+        super.onStart()
+        Intent(this, CommandService::class.java).also { intent ->
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
     }
-
-    private fun saveCurrentProfileData() {
-        val currentProfile = profileSpinner.selectedItem?.toString() ?: return
-        saveProfileData(currentProfile)
+    
+    override fun onStop() {
+        super.onStop()
+        if (serviceBound) {
+            unbindService(serviceConnection)
+            serviceBound = false
+        }
     }
-
-    private fun showAddProfileDialog() {
-        val input =
-                EditText(this).apply {
-                    hint = "Profile Name"
-                    inputType = InputType.TYPE_CLASS_TEXT
-                }
-        AlertDialog.Builder(this)
-                .setTitle("New Profile")
-                .setView(input)
-                .setPositiveButton("Create") { _, _ ->
-                    val name = input.text.toString().trim()
-                    if (name.isNotEmpty() && !profileList.contains(name)) {
-                        saveCurrentProfileData()
-                        sharedPreferences.edit().apply {
-                            putString("profile_${name}_ips", "1.1.1.1")
-                            putString("profile_${name}_domain", "")
-                            putString("profile_${name}_socks5_port", "1080")
-                            apply()
+    
+    @Composable
+    fun MainScreen() {
+        var showProfileDialog by remember { mutableStateOf(false) }
+        var showLogSheet by remember { mutableStateOf(false) }
+        
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("SlipstreamApp") },
+                    actions = {
+                        IconButton(onClick = { showLogSheet = true }) {
+                            Icon(Icons.Default.List, "View Logs")
                         }
-
-                        profileList.add(name)
-                        profileList.sort()
-                        profileAdapter.notifyDataSetChanged()
-                        saveProfilesList()
-
-                        val newIndex = profileList.indexOf(name)
-                        profileSpinner.setSelection(newIndex)
-                        lastSelectedPosition = newIndex
-                        loadProfileData(name)
-                        addLog("Created new profile: $name")
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Status Card
+                StatusCard(
+                    slipstreamStatus = slipstreamStatus.value,
+                    socksStatus = socksStatus.value
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Profile Selection
+                ProfileSelector(
+                    profiles = profiles,
+                    currentProfile = currentProfile.value,
+                    onProfileSelected = { profile ->
+                        currentProfile.value = profile
+                        profiles.forEach { it.isActive = (it == profile) }
+                        saveProfiles()
+                        log("Switched to profile: ${profile.name}")
+                    },
+                    onAddProfile = { showProfileDialog = true }
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Control Buttons
+                ControlButtons(
+                    slipstreamStatus = slipstreamStatus.value,
+                    onStart = { startProxy() },
+                    onStop = { stopProxy() }
+                )
+            }
+        }
+        
+        // Profile Dialog
+        if (showProfileDialog) {
+            ProfileDialog(
+                onDismiss = { showProfileDialog = false },
+                onSave = { profile ->
+                    profiles.add(profile)
+                    saveProfiles()
+                    showProfileDialog = false
+                }
+            )
+        }
+        
+        // Log Sheet
+        if (showLogSheet) {
+            LogBottomSheet(
+                logs = logMessages,
+                onDismiss = { showLogSheet = false }
+            )
+        }
+    }
+    
+    @Composable
+    fun StatusCard(slipstreamStatus: SlipstreamStatus, socksStatus: SocksStatus) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(4.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text("Status", style = MaterialTheme.typography.titleLarge)
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                StatusRow("Slipstream", slipstreamStatus.toDisplayString(), slipstreamStatus.getColor())
+                Spacer(modifier = Modifier.height(8.dp))
+                StatusRow("SOCKS5", socksStatus.toDisplayString(), socksStatus.getColor())
+            }
+        }
+    }
+    
+    @Composable
+    fun StatusRow(label: String, status: String, color: Color) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .clip(CircleShape)
+                        .background(color)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(status, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+    
+    @Composable
+    fun ProfileSelector(
+        profiles: List<Profile>,
+        currentProfile: Profile,
+        onProfileSelected: (Profile) -> Unit,
+        onAddProfile: () -> Unit
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(4.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Profile", style = MaterialTheme.typography.titleLarge)
+                    IconButton(onClick = onAddProfile) {
+                        Icon(Icons.Default.Add, "Add Profile")
                     }
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
-    }
-
-    private fun deleteCurrentProfile() {
-        if (profileList.size <= 1) {
-            Toast.makeText(this, "Cannot delete the last profile", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val currentProfile = profileSpinner.selectedItem.toString()
-        AlertDialog.Builder(this)
-                .setTitle("Delete Profile")
-                .setMessage("Are you sure you want to delete '$currentProfile'?")
-                .setPositiveButton("Delete") { _, _ ->
-                    profileList.remove(currentProfile)
-                    saveProfilesList()
-                    profileAdapter.notifyDataSetChanged()
-                    lastSelectedPosition = 0
-                    profileSpinner.setSelection(0)
-                    loadProfileData(profileList[0])
-                    addLog("Deleted profile: $currentProfile")
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-    }
-
-    private fun saveProfilesList() {
-        sharedPreferences.edit().putStringSet(PREF_PROFILES_SET, profileList.toSet()).apply()
-    }
-
-    private fun addResolverInput(ip: String, canDelete: Boolean) {
-        val rowLayout =
-                LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    layoutParams =
-                            LinearLayout.LayoutParams(
-                                            ViewGroup.LayoutParams.MATCH_PARENT,
-                                            ViewGroup.LayoutParams.WRAP_CONTENT
-                                    )
-                                    .apply { setMargins(0, 0, 0, 16) }
-                }
-
-        val editText =
-                EditText(this).apply {
-                    layoutParams =
-                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f)
-                    hint = "Resolver IP"
-                    setText(ip)
-                }
-        rowLayout.addView(editText)
-
-        if (canDelete) {
-            val deleteBtn =
-                    Button(this).apply {
-                        text = "–"
-                        setTextColor(Color.WHITE)
-                        setBackgroundColor(Color.RED)
-                        setOnClickListener { resolversContainer.removeView(rowLayout) }
-                    }
-            rowLayout.addView(deleteBtn)
-        }
-        resolversContainer.addView(rowLayout)
-    }
-
-    private fun getIpListFromUI(): ArrayList<String> {
-        val ipList = ArrayList<String>()
-        for (i in 0 until resolversContainer.childCount) {
-            val row = resolversContainer.getChildAt(i) as? ViewGroup ?: continue
-            for (j in 0 until row.childCount) {
-                val child = row.getChildAt(j)
-                if (child is EditText) {
-                    val text = child.text.toString().trim()
-                    if (text.isNotBlank()) ipList.add(text)
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                profiles.forEach { profile ->
+                    ProfileItem(
+                        profile = profile,
+                        isSelected = profile == currentProfile,
+                        onClick = { onProfileSelected(profile) }
+                    )
                 }
             }
         }
-        return ipList
     }
-
-    private fun startCommandService() {
-        val ipList = getIpListFromUI()
-        val domainName = domainInput.text.toString().trim()
-        val socks5Port = socks5PortInput.text.toString().trim()
-
-        if (ipList.isEmpty() || domainName.isBlank()) {
-            Toast.makeText(this, "Configuration missing", Toast.LENGTH_SHORT).show()
-            syncSwitchState(false)
-            addLog("Config missing - Resolvers: ${ipList.size}, Domain: ${domainName.isNotBlank()}", isError = true)
-            return
+    
+    @Composable
+    fun ProfileItem(profile: Profile, isSelected: Boolean, onClick: () -> Unit) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+                .clickable(onClick = onClick),
+            shape = RoundedCornerShape(8.dp),
+            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer 
+                   else MaterialTheme.colorScheme.surface,
+            tonalElevation = if (isSelected) 4.dp else 0.dp
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    profile.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Domain: ${profile.domain}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Resolvers: ${profile.resolvers}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Port: ${profile.socksPort}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
-
-        if (socks5Port.isBlank() || socks5Port.toIntOrNull() == null) {
-            Toast.makeText(this, "Invalid SOCKS5 port", Toast.LENGTH_SHORT).show()
-            syncSwitchState(false)
-            addLog("Invalid SOCKS5 port: $socks5Port", isError = true)
-            return
+    }
+    
+    @Composable
+    fun ControlButtons(slipstreamStatus: SlipstreamStatus, onStart: () -> Unit, onStop: () -> Unit) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Button(
+                onClick = onStart,
+                modifier = Modifier.weight(1f),
+                enabled = slipstreamStatus is SlipstreamStatus.Stopped,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Start")
+            }
+            
+            Button(
+                onClick = onStop,
+                modifier = Modifier.weight(1f),
+                enabled = slipstreamStatus !is SlipstreamStatus.Stopped,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(Icons.Default.Close, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Stop")
+            }
         }
-
-        addLog("Starting - Domain: $domainName, Resolvers: ${ipList.joinToString(",")}, Port: $socks5Port")
-
-        val serviceIntent =
-                Intent(this, CommandService::class.java).apply {
-                    putStringArrayListExtra(CommandService.EXTRA_RESOLVERS, ipList)
-                    putExtra(CommandService.EXTRA_DOMAIN, domainName)
-                    putExtra(CommandService.EXTRA_SOCKS5_PORT, socks5Port)
+    }
+    
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun ProfileDialog(onDismiss: () -> Unit, onSave: (Profile) -> Unit) {
+        var name by remember { mutableStateOf("") }
+        var domain by remember { mutableStateOf("") }
+        var resolvers by remember { mutableStateOf("1.1.1.1") }
+        var port by remember { mutableStateOf("1081") }
+        
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Add Profile") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Profile Name") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = domain,
+                        onValueChange = { domain = it },
+                        label = { Text("Domain") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = resolvers,
+                        onValueChange = { resolvers = it },
+                        label = { Text("Resolvers") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = port,
+                        onValueChange = { port = it },
+                        label = { Text("SOCKS5 Port") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
-        ContextCompat.startForegroundService(this, serviceIntent)
-        updateStatusUI("Starting...", "Waiting...")
-        addLog("SOCKS5 proxy service started on port $socks5Port")
-    }
-
-    private fun updateStatusUI(slipstreamStatus: String? = null, socksStatus: String? = null) {
-        slipstreamStatus?.let { status ->
-            slipstreamStatusText.text = status
-            val color =
-                    when {
-                        status.contains("Running", true) -> Color.GREEN
-                        status.contains("Stopped", true) || status.contains("Failed", true) ->
-                                Color.RED
-                        else -> Color.YELLOW
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (name.isNotBlank() && domain.isNotBlank()) {
+                            val profile = Profile(
+                                name = name,
+                                domain = domain,
+                                resolvers = resolvers,
+                                socksPort = port.toIntOrNull() ?: 1081
+                            )
+                            onSave(profile)
+                        }
                     }
-            slipstreamStatusIndicator.setTextColor(color)
-            slipstreamStatusIndicator.text =
-                    if (color == Color.GREEN) "✔" else if (color == Color.RED) "❌" else "🟡"
-
-            if (status.contains("Running", true)) syncSwitchState(true)
-            else if (status.contains("Stopped", true) || status.contains("Failed", true))
-                    syncSwitchState(false)
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun LogBottomSheet(logs: List<String>, onDismiss: () -> Unit) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val listState = rememberLazyListState()
+        val coroutineScope = rememberCoroutineScope()
+        
+        LaunchedEffect(logs.size) {
+            if (logs.isNotEmpty()) {
+                listState.animateScrollToItem(logs.size - 1)
+            }
         }
-
-        socksStatus?.let { status ->
-            socks5StatusText.text = status
-            val color =
-                    if (status.contains("Running", true)) Color.GREEN
-                    else if (status.contains("Stopped", true)) Color.RED else Color.YELLOW
-            socks5StatusIndicator.setTextColor(color)
-            socks5StatusIndicator.text =
-                    if (color == Color.GREEN) "✔" else if (color == Color.RED) "❌" else "🟡"
+        
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight(0.8f)
+                    .padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Logs", style = MaterialTheme.typography.titleLarge)
+                    IconButton(onClick = { logMessages.clear() }) {
+                        Icon(Icons.Default.Delete, "Clear Logs")
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color(0xFF1E1E1E),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        items(logs) { log ->
+                            Text(
+                                text = log,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = when {
+                                    log.contains("❌") || log.contains("ERROR") -> Color(0xFFFF6B6B)
+                                    log.contains("✓") || log.contains("SUCCESS") -> Color(0xFF4ECDC4)
+                                    log.contains("⚠️") || log.contains("WARNING") -> Color(0xFFFFA500)
+                                    log.contains("ℹ️") -> Color(0xFF87CEEB)
+                                    else -> Color(0xFFE0E0E0)
+                                },
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
-
-    private fun syncSwitchState(checked: Boolean) {
-        if (tunnelSwitch.isChecked != checked) {
-            isUpdatingSwitch = true
-            tunnelSwitch.isChecked = checked
-            isUpdatingSwitch = false
+    
+    private fun startProxy() {
+        val profile = currentProfile.value
+        
+        if (profile.domain.isBlank() || profile.resolvers.isBlank()) {
+            log("❌ Config missing - Resolvers: ${profile.resolvers.isNotBlank()}, Domain: ${profile.domain.isNotBlank()}")
+            return
+        }
+        
+        log("ℹ️ Starting SOCKS5 proxy service...")
+        log("ℹ️ Starting - Domain: ${profile.domain}, Resolvers: ${profile.resolvers}, Port: ${profile.socksPort}")
+        
+        val intent = Intent(this, CommandService::class.java).apply {
+            putExtra("domain", profile.domain)
+            putExtra("resolvers", profile.resolvers)
+            putExtra("port", profile.socksPort)
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        
+        slipstreamStatus.value = SlipstreamStatus.Starting()
+        socksStatus.value = SocksStatus.Waiting
+        
+        log("ℹ️ SOCKS5 proxy service started on port ${profile.socksPort}")
+    }
+    
+    private fun stopProxy() {
+        log("ℹ️ Stopping SOCKS5 proxy service...")
+        stopService(Intent(this, CommandService::class.java))
+        slipstreamStatus.value = SlipstreamStatus.Stopping
+        socksStatus.value = SocksStatus.Stopping
+    }
+    
+    private fun log(message: String) {
+        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        logMessages.add("[$timestamp] $message")
+    }
+    
+    private fun loadProfiles() {
+        val prefs = getSharedPreferences("profiles", Context.MODE_PRIVATE)
+        val savedProfiles = prefs.getString("profiles_json", null)
+        
+        if (savedProfiles != null) {
+            // TODO: Parse JSON and load profiles
+            log("ℹ️ Loaded profile: ${currentProfile.value.name}")
         }
     }
-
-    override fun onDestroy() {
-        saveCurrentProfileData()
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver)
-        addLog("SlipstreamApp stopped")
-        super.onDestroy()
+    
+    private fun saveProfiles() {
+        val prefs = getSharedPreferences("profiles", Context.MODE_PRIVATE)
+        // TODO: Save profiles to JSON
     }
 }
+
+// Extension functions for status display
+fun SlipstreamStatus.toDisplayString(): String = when (this) {
+    is SlipstreamStatus.Stopped -> "Stopped"
+    is SlipstreamStatus.Stopping -> "Stopping..."
+    is SlipstreamStatus.Starting -> if (message.isNotEmpty()) message else "Starting..."
+    is SlipstreamStatus.Running -> "Running"
+    is SlipstreamStatus.Failed -> "Failed: $error"
+}
+
+fun SlipstreamStatus.getColor(): Color = when (this) {
+    is SlipstreamStatus.Stopped -> Color.Gray
+    is SlipstreamStatus.Stopping -> Color(0xFFFFA500)
+    is SlipstreamStatus.Starting -> Color(0xFF87CEEB)
+    is SlipstreamStatus.Running -> Color(0xFF4CAF50)
+    is SlipstreamStatus.Failed -> Color(0xFFFF6B6B)
+}
+
+fun SocksStatus.toDisplayString(): String = when (this) {
+    is SocksStatus.Stopped -> "Stopped"
+    is SocksStatus.Stopping -> "Stopping..."
+    is SocksStatus.Waiting -> "Waiting..."
+    is SocksStatus.Running -> "Running"
+}
+
+fun SocksStatus.getColor(): Color = when (this) {
+    is SocksStatus.Stopped -> Color.Gray
+    is SocksStatus.Stopping -> Color(0xFFFFA500)
+    is SocksStatus.Waiting -> Color(0xFF87CEEB)
+    is SocksStatus.Running -> Color(0xFF4CAF50)
+}
+
+data class Profile(
+    val name: String,
+    val domain: String,
+    val resolvers: String,
+    val socksPort: Int,
+    var isActive: Boolean = false
+)
