@@ -37,6 +37,7 @@ class CommandService : LifecycleService(), CoroutineScope {
 
     private var slipstreamProcess: Process? = null
     private var slipstreamReaderJob: Job? = null
+    private var slipstreamErrorJob: Job? = null
     private var tunnelMonitorJob: Job? = null
     private var mainExecutionJob: Job? = null
 
@@ -157,25 +158,22 @@ class CommandService : LifecycleService(), CoroutineScope {
                     broadcastLog("Step 6: Command: ${commandList.joinToString(" ")}")
                     broadcastLog("Step 7: Starting process from native lib dir...")
 
-                    slipstreamProcess = ProcessBuilder(commandList)
-                            .redirectErrorStream(true)
-                            .start()
+                    // Keep stdout and stderr separate to capture crash info
+                    val processBuilder = ProcessBuilder(commandList)
+                    processBuilder.redirectErrorStream(false)
+                    slipstreamProcess = processBuilder.start()
 
                     broadcastLog("Step 8: Process started, alive: ${slipstreamProcess?.isAlive}")
 
+                    // Read stdout
                     slipstreamReaderJob =
                             launch {
-                                val reader =
-                                        BufferedReader(
-                                                InputStreamReader(
-                                                        slipstreamProcess?.inputStream
-                                                )
-                                        )
+                                val reader = BufferedReader(InputStreamReader(slipstreamProcess?.inputStream))
                                 try {
                                     var lineCount = 0
                                     reader.forEachLine { line ->
                                         lineCount++
-                                        broadcastLog("[slipstream:$lineCount] $line")
+                                        broadcastLog("[stdout:$lineCount] $line")
                                         if (line.contains(
                                                         "ListenerBind_Init failed",
                                                         ignoreCase = true
@@ -188,9 +186,27 @@ class CommandService : LifecycleService(), CoroutineScope {
                                             sendStatusUpdate("Running", "Running on port $socks5Port")
                                         }
                                     }
-                                    broadcastLog("Output stream closed after $lineCount lines")
+                                    broadcastLog("stdout closed after $lineCount lines")
                                 } catch (e: Exception) {
-                                    broadcastLog("Reader error: ${e.message}", isError = true)
+                                    broadcastLog("stdout error: ${e.message}", isError = true)
+                                }
+                            }
+
+                    // Read stderr (shows crash info and missing libraries)
+                    slipstreamErrorJob =
+                            launch {
+                                val errorReader = BufferedReader(InputStreamReader(slipstreamProcess?.errorStream))
+                                try {
+                                    var errLineCount = 0
+                                    errorReader.forEachLine { line ->
+                                        errLineCount++
+                                        broadcastLog("[stderr:$errLineCount] $line", isError = true)
+                                    }
+                                    if (errLineCount > 0) {
+                                        broadcastLog("stderr closed after $errLineCount lines", isError = true)
+                                    }
+                                } catch (e: Exception) {
+                                    broadcastLog("stderr reader error: ${e.message}", isError = true)
                                 }
                             }
 
@@ -205,6 +221,10 @@ class CommandService : LifecycleService(), CoroutineScope {
                             "unknown"
                         }
                         broadcastLog("Process died! Exit code: $exitValue", isError = true)
+                        
+                        // Wait a bit for stderr to be read
+                        delay(500)
+                        
                         handleError("Slipstream failed", "Process died. Exit code: $exitValue")
                         return
                     }
@@ -226,6 +246,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                     sendStatusUpdate("Stopping...", "Stopping...")
                     tunnelMonitorJob?.cancel()
                     slipstreamReaderJob?.cancel()
+                    slipstreamErrorJob?.cancel()
 
                     slipstreamProcess?.destroy()
                     slipstreamProcess?.waitFor()
