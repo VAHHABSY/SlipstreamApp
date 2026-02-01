@@ -16,16 +16,20 @@ jobs:
     strategy:
       matrix:
         target:
-          - triple: aarch64-linux-android
+          - rust_triple: aarch64-linux-android
+            ndk_triple: aarch64-linux-android
             abi: arm64-v8a
             api: 33
-          - triple: armv7-linux-androideabi
+          - rust_triple: armv7-linux-androideabi
+            ndk_triple: armv7a-linux-androideabi
             abi: armeabi-v7a
             api: 33
-          - triple: x86_64-linux-android
+          - rust_triple: x86_64-linux-android
+            ndk_triple: x86_64-linux-android
             abi: x86_64
             api: 33
-          - triple: i686-linux-android
+          - rust_triple: i686-linux-android
+            ndk_triple: i686-linux-android
             abi: x86
             api: 33
 
@@ -52,12 +56,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target.triple }}
+          targets: ${{ matrix.target.rust_triple }}
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 perl pkg-config libssl-dev
+          sudo apt-get install -y cmake ninja-build python3 perl pkg-config
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -66,47 +70,67 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             slipstream-plugin-android/app/src/main/rust/slipstream-rust/target
-          key: ${{ runner.os }}-cargo-${{ matrix.target.triple }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.target.abi }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Set build environment for ${{ matrix.target.abi }}
         run: |
-          # Set NDK paths
+          # NDK toolchain path
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           
-          # Set target-specific linker
-          TARGET_UPPER=$(echo "${{ matrix.target.triple }}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+          # Compiler paths with correct naming
+          CC_PATH="${NDK_TOOLCHAIN}/bin/${{ matrix.target.ndk_triple }}${{ matrix.target.api }}-clang"
+          CXX_PATH="${NDK_TOOLCHAIN}/bin/${{ matrix.target.ndk_triple }}${{ matrix.target.api }}-clang++"
+          AR_PATH="${NDK_TOOLCHAIN}/bin/llvm-ar"
+          RANLIB_PATH="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
           
-          echo "CARGO_TARGET_${TARGET_UPPER}_LINKER=${NDK_TOOLCHAIN}/bin/${{ matrix.target.triple }}${{ matrix.target.api }}-clang" >> $GITHUB_ENV
-          echo "CC_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/${{ matrix.target.triple }}${{ matrix.target.api }}-clang" >> $GITHUB_ENV
-          echo "CXX_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/${{ matrix.target.triple }}${{ matrix.target.api }}-clang++" >> $GITHUB_ENV
-          echo "AR_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/llvm-ar" >> $GITHUB_ENV
-          echo "RANLIB_${{ matrix.target.triple }}=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> $GITHUB_ENV
+          # Verify compiler exists
+          if [ ! -f "$CC_PATH" ]; then
+            echo "❌ ERROR: Compiler not found at $CC_PATH"
+            echo "Available compilers:"
+            ls -1 ${NDK_TOOLCHAIN}/bin/*-clang | grep -v "++" || true
+            exit 1
+          fi
           
-          # Set environment for picoquic/CMake builds
+          echo "✓ Compiler found: $CC_PATH"
+          
+          # Set Cargo target-specific variables (uppercase with underscores)
+          TARGET_UPPER=$(echo "${{ matrix.target.rust_triple }}" | tr '[:lower:]-' '[:upper:]_')
+          
+          echo "CARGO_TARGET_${TARGET_UPPER}_LINKER=${CC_PATH}" >> $GITHUB_ENV
+          echo "CC_${{ matrix.target.rust_triple }}=${CC_PATH}" >> $GITHUB_ENV
+          echo "CXX_${{ matrix.target.rust_triple }}=${CXX_PATH}" >> $GITHUB_ENV
+          echo "AR_${{ matrix.target.rust_triple }}=${AR_PATH}" >> $GITHUB_ENV
+          echo "RANLIB_${{ matrix.target.rust_triple }}=${RANLIB_PATH}" >> $GITHUB_ENV
+          
+          # Also set generic CC/CXX for the build
+          echo "CC=${CC_PATH}" >> $GITHUB_ENV
+          echo "CXX=${CXX_PATH}" >> $GITHUB_ENV
+          echo "AR=${AR_PATH}" >> $GITHUB_ENV
+          echo "RANLIB=${RANLIB_PATH}" >> $GITHUB_ENV
+          
+          # Android-specific environment
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
           echo "ANDROID_ABI=${{ matrix.target.abi }}" >> $GITHUB_ENV
           echo "ANDROID_PLATFORM=android-${{ matrix.target.api }}" >> $GITHUB_ENV
-          echo "CMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
           
-          # For OpenSSL vendored build
+          # OpenSSL build configuration
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
 
       - name: Build slipstream-client for ${{ matrix.target.abi }}
         working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
         run: |
-          echo "=== Building for ${{ matrix.target.triple }} (${{ matrix.target.abi }}) ==="
+          echo "=== Building for ${{ matrix.target.rust_triple }} (${{ matrix.target.abi }}) ==="
           
           cargo build \
             --release \
-            --target ${{ matrix.target.triple }} \
+            --target ${{ matrix.target.rust_triple }} \
             --bin slipstream-client \
-            --features openssl-vendored,picoquic-minimal-build \
-            -vv
+            --features openssl-vendored,picoquic-minimal-build
 
       - name: Verify binary
         working-directory: slipstream-plugin-android/app/src/main/rust/slipstream-rust
         run: |
-          BINARY="target/${{ matrix.target.triple }}/release/slipstream-client"
+          BINARY="target/${{ matrix.target.rust_triple }}/release/slipstream-client"
           
           if [ ! -f "$BINARY" ]; then
             echo "❌ Binary not found: $BINARY"
@@ -121,7 +145,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: slipstream-${{ matrix.target.abi }}
-          path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${{ matrix.target.triple }}/release/slipstream-client
+          path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target/${{ matrix.target.rust_triple }}/release/slipstream-client
           retention-days: 1
 
   package-and-commit:
@@ -198,7 +222,7 @@ jobs:
           ## Installation
           
           These files are in the correct directory structure for Android Studio.
-          Simply commit this folder and rebuild your app.
+          The binaries will be automatically included when you build your APK.
           
           ## Binary Sizes
           
