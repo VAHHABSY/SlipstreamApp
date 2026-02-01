@@ -1,0 +1,101 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Configure Gradle memory settings
+        run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
+          org.gradle.daemon=false
+          org.gradle.parallel=false
+          org.gradle.caching=true
+          org.gradle.configureondemand=false
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+          echo "=== Gradle properties configured ==="
+          cat ~/.gradle/gradle.properties
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Clean build
+        run: ./gradlew clean --no-daemon
+
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --max-workers=2 \
+            --stacktrace \
+            --info
+        env:
+          GRADLE_OPTS: "-Xmx6144m -XX:MaxMetaspaceSize=1024m"
+
+      - name: Verify APK exists
+        run: |
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            echo "✓ APK built successfully"
+            ls -lh app/build/outputs/apk/debug/app-debug.apk
+          else
+            echo "❌ APK not found"
+            exit 1
+          fi
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            app/build/reports/
+            app/build/outputs/logs/
+          retention-days: 7
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## 📱 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            APK_SIZE=$(ls -lh app/build/outputs/apk/debug/app-debug.apk | awk '{print $5}')
+            echo "### ✅ Build Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **APK Size:** $APK_SIZE" >> $GITHUB_STEP_SUMMARY
+            echo "- **Location:** \`app/build/outputs/apk/debug/app-debug.apk\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the build logs for errors." >> $GITHUB_STEP_SUMMARY
+          fi
