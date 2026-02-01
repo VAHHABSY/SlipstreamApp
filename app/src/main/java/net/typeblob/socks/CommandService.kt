@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -125,6 +126,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                 }
 
                 try {
+                    Log.d(TAG, "Step 1: Copying binary to files dir")
                     val slipstreamPath = copyBinaryToFilesDir(SLIPSTREAM_BINARY_NAME)
 
                     if (slipstreamPath == null) {
@@ -132,16 +134,25 @@ class CommandService : LifecycleService(), CoroutineScope {
                         return
                     }
 
+                    Log.d(TAG, "Step 2: Binary copied to: $slipstreamPath")
                     val slipstreamFile = File(slipstreamPath)
+                    
+                    Log.d(TAG, "Step 3: Checking if binary exists: ${slipstreamFile.exists()}")
+                    Log.d(TAG, "Step 4: Binary size: ${slipstreamFile.length()} bytes")
+                    Log.d(TAG, "Step 5: Checking if binary is executable: ${slipstreamFile.canExecute()}")
                     
                     if (!slipstreamFile.canExecute()) {
                         Log.e(TAG, "Slipstream binary not executable, attempting to set permissions")
                         try {
-                            Runtime.getRuntime().exec("chmod 755 $slipstreamPath").waitFor()
+                            val chmodProcess = Runtime.getRuntime().exec("chmod 755 $slipstreamPath")
+                            val exitCode = chmodProcess.waitFor()
+                            Log.d(TAG, "chmod exit code: $exitCode")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to chmod slipstream: ${e.message}")
                         }
                     }
+
+                    Log.d(TAG, "Step 6: After chmod - canExecute: ${slipstreamFile.canExecute()}")
 
                     if (!slipstreamFile.canExecute()) {
                         handleError("Permission Error", "Cannot execute slipstream binary at $slipstreamPath")
@@ -153,9 +164,15 @@ class CommandService : LifecycleService(), CoroutineScope {
                     commandList.add("--socks-port")
                     commandList.add(socks5Port)
 
-                    Log.d(TAG, "Starting slipstream with SOCKS5: ${commandList.joinToString(" ")}")
+                    Log.d(TAG, "Step 7: Starting slipstream with command: ${commandList.joinToString(" ")}")
+                    Log.d(TAG, "Step 8: Working directory: ${filesDir.absolutePath}")
 
-                    slipstreamProcess = ProcessBuilder(commandList).redirectErrorStream(true).start()
+                    slipstreamProcess = ProcessBuilder(commandList)
+                            .redirectErrorStream(true)
+                            .directory(filesDir)
+                            .start()
+
+                    Log.d(TAG, "Step 9: Process started, checking if alive: ${slipstreamProcess?.isAlive}")
 
                     slipstreamReaderJob =
                             launch {
@@ -166,8 +183,10 @@ class CommandService : LifecycleService(), CoroutineScope {
                                                 )
                                         )
                                 try {
+                                    var lineCount = 0
                                     reader.forEachLine { line ->
-                                        Log.d(TAG, "[slipstream] $line")
+                                        lineCount++
+                                        Log.d(TAG, "[slipstream:$lineCount] $line")
                                         if (line.contains(
                                                         "ListenerBind_Init failed",
                                                         ignoreCase = true
@@ -180,28 +199,40 @@ class CommandService : LifecycleService(), CoroutineScope {
                                             sendStatusUpdate("Running", "Running on port $socks5Port")
                                         }
                                     }
+                                    Log.d(TAG, "Slipstream output stream closed after $lineCount lines")
                                 } catch (e: Exception) {
-                                    Log.d(TAG, "Slipstream reader stopped: ${e.message}")
+                                    Log.e(TAG, "Slipstream reader error: ${e.message}", e)
                                 }
                             }
 
                     delay(1500)
-                    if (slipstreamProcess?.isAlive != true) {
-                        handleError("Slipstream failed", "Process not alive after start")
+                    val isAliveAfterDelay = slipstreamProcess?.isAlive ?: false
+                    Log.d(TAG, "Step 10: After 1.5s delay, process alive: $isAliveAfterDelay")
+                    
+                    if (!isAliveAfterDelay) {
+                        val exitValue = try {
+                            slipstreamProcess?.exitValue()
+                        } catch (e: Exception) {
+                            "unknown"
+                        }
+                        handleError("Slipstream failed", "Process died immediately. Exit code: $exitValue")
                         return
                     }
 
                     sendStatusUpdate("Running", "Running on port $socks5Port")
+                    Log.d(TAG, "Step 11: Starting monitoring")
                     startMonitoring()
                 } catch (e: Exception) {
                     Log.e(TAG, "Error starting tunnel: ${e.message}", e)
-                    handleError("Slipstream failed", e.message ?: "Unknown error")
+                    e.printStackTrace()
+                    handleError("Slipstream failed", "${e.javaClass.simpleName}: ${e.message}")
                 }
             }
 
     private suspend fun stopTunnel() =
             tunnelMutex.withLock {
                 try {
+                    Log.d(TAG, "Stopping tunnel...")
                     sendStatusUpdate("Stopping...", "Stopping...")
                     tunnelMonitorJob?.cancel()
                     slipstreamReaderJob?.cancel()
@@ -211,6 +242,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                     slipstreamProcess = null
 
                     sendStatusUpdate("Stopped", "Stopped")
+                    Log.d(TAG, "Tunnel stopped successfully")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error stopping tunnel", e)
                 }
@@ -224,6 +256,7 @@ class CommandService : LifecycleService(), CoroutineScope {
                         while (isActive) {
                             delay(MONITOR_INTERVAL_MS)
                             if (slipstreamProcess?.isAlive == false) {
+                                Log.e(TAG, "Slipstream process died unexpectedly")
                                 handleError("Slipstream crashed", "Process terminated unexpectedly")
                                 break
                             }
@@ -306,39 +339,53 @@ class CommandService : LifecycleService(), CoroutineScope {
         val file = File(filesDir, name)
         return try {
             if (!file.exists()) {
-                Log.d(TAG, "Copying $name from assets to ${file.absolutePath}")
+                Log.d(TAG, "Binary does not exist in filesDir, copying from assets...")
                 assets.open(name).use { input ->
-                    file.outputStream().use { output -> input.copyTo(output) }
+                    file.outputStream().use { output -> 
+                        val bytes = input.copyTo(output)
+                        Log.d(TAG, "Copied $bytes bytes from assets")
+                    }
                 }
+            } else {
+                Log.d(TAG, "Binary already exists in filesDir, size: ${file.length()} bytes")
             }
             
+            // Set executable permissions using multiple methods
+            Log.d(TAG, "Setting executable permissions...")
             file.setExecutable(true, false)
             file.setReadable(true, false)
             file.setWritable(true, true)
             
+            // Also try chmod as fallback
             try {
-                Runtime.getRuntime().exec("chmod 755 ${file.absolutePath}").waitFor()
-                Log.d(TAG, "Set permissions for $name using chmod")
+                val chmodProcess = Runtime.getRuntime().exec("chmod 755 ${file.absolutePath}")
+                val exitCode = chmodProcess.waitFor()
+                Log.d(TAG, "Set permissions for $name using chmod (exit: $exitCode)")
             } catch (e: Exception) {
                 Log.w(TAG, "chmod failed for $name: ${e.message}")
             }
             
+            // Verify permissions
             if (file.canExecute()) {
-                Log.d(TAG, "$name is executable")
+                Log.d(TAG, "$name is executable ✓")
             } else {
-                Log.e(TAG, "$name is NOT executable after permission setting")
+                Log.e(TAG, "$name is NOT executable ✗")
             }
             
             file.absolutePath
         } catch (e: Exception) {
             Log.e(TAG, "Failed to copy binary $name: ${e.message}", e)
+            e.printStackTrace()
             null
         }
     }
 
     private fun cleanUpLingeringProcesses() {
         try {
-            Runtime.getRuntime().exec(arrayOf("killall", "-9", SLIPSTREAM_BINARY_NAME)).waitFor()
+            Log.d(TAG, "Cleaning up lingering processes...")
+            val killProcess = Runtime.getRuntime().exec(arrayOf("killall", "-9", SLIPSTREAM_BINARY_NAME))
+            val exitCode = killProcess.waitFor()
+            Log.d(TAG, "Cleanup exit code: $exitCode")
         } catch (e: Exception) {
             Log.d(TAG, "Process cleanup: ${e.message}")
         }
