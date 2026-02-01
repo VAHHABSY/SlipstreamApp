@@ -59,13 +59,35 @@ jobs:
           path: slipstream-plugin-android/app/src/main/rust/slipstream-rust/target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('slipstream-plugin-android/**/Cargo.lock') }}
 
+      - name: Set NDK environment variables
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          
+          echo "=== Environment Information ==="
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
+          echo ""
+          echo "=== NDK Directory ==="
+          ls -la $ANDROID_NDK_HOME || echo "NDK directory not found at $ANDROID_NDK_HOME"
+
+      - name: Create local.properties for Gradle
+        working-directory: slipstream-plugin-android
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "ndk.dir=$ANDROID_NDK_HOME" >> local.properties
+          
+          echo "=== local.properties content ==="
+          cat local.properties
+
       - name: Build Slipstream binaries
         working-directory: slipstream-plugin-android
         run: |
           chmod +x gradlew
           
           echo "=== Starting Rust build for Android ==="
-          ./gradlew cargoBuild
+          ./gradlew cargoBuild --stacktrace
           
           echo ""
           echo "=== Build completed ==="
