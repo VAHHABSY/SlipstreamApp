@@ -39,10 +39,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var socks5StatusIndicator: TextView
     private lateinit var socks5StatusText: TextView
     
+    private lateinit var logScrollView: ScrollView
     private lateinit var logTextView: TextView
     private lateinit var clearLogButton: Button
+    private lateinit var copyLogButton: Button
     private val logBuilder = StringBuilder()
-    private val maxLogLines = 100
+    private val maxLogLines = 200
 
     private lateinit var sharedPreferences: SharedPreferences
     private var isUpdatingSwitch = false
@@ -66,7 +68,7 @@ class MainActivity : AppCompatActivity() {
                                     intent.getStringExtra(CommandService.EXTRA_STATUS_SLIPSTREAM)
                             val socksStatus = intent.getStringExtra(CommandService.EXTRA_STATUS_SOCKS5)
                             updateStatusUI(slipstreamStatus, socksStatus)
-                            addLog("Status Update - Slipstream: $slipstreamStatus, SOCKS5: $socksStatus")
+                            addLog("Status: Slipstream=$slipstreamStatus, SOCKS5=$socksStatus")
                         }
                         CommandService.ACTION_ERROR -> {
                             val message =
@@ -115,12 +117,21 @@ class MainActivity : AppCompatActivity() {
         socks5StatusIndicator = findViewById(R.id.socks5_status_indicator)
         socks5StatusText = findViewById(R.id.socks5_status_text)
         
+        logScrollView = findViewById(R.id.log_scroll_view)
         logTextView = findViewById(R.id.log_text_view)
         clearLogButton = findViewById(R.id.clear_log_button)
+        copyLogButton = findViewById(R.id.copy_log_button)
         
+        // Enable scrolling and text selection
         logTextView.movementMethod = ScrollingMovementMethod()
+        logTextView.setTextIsSelectable(true)
+        
         clearLogButton.setOnClickListener { 
             clearLog()
+        }
+        
+        copyLogButton.setOnClickListener {
+            copyLogsToClipboard()
         }
 
         setupProfiles()
@@ -173,9 +184,9 @@ class MainActivity : AppCompatActivity() {
         
         runOnUiThread {
             logTextView.text = logBuilder.toString()
-            val scrollAmount = logTextView.layout?.getLineTop(logTextView.lineCount) ?: 0
-            if (scrollAmount > logTextView.height) {
-                logTextView.scrollTo(0, scrollAmount - logTextView.height)
+            // Auto-scroll to bottom
+            logScrollView.post {
+                logScrollView.fullScroll(View.FOCUS_DOWN)
             }
         }
     }
@@ -184,6 +195,14 @@ class MainActivity : AppCompatActivity() {
         logBuilder.clear()
         logTextView.text = ""
         addLog("Log cleared")
+    }
+    
+    private fun copyLogsToClipboard() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("SlipstreamApp Logs", logBuilder.toString())
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
+        addLog("Logs copied to clipboard")
     }
 
     private fun checkPermissionsAndStartService() {
@@ -392,7 +411,7 @@ class MainActivity : AppCompatActivity() {
         if (ipList.isEmpty() || domainName.isBlank()) {
             Toast.makeText(this, "Configuration missing", Toast.LENGTH_SHORT).show()
             syncSwitchState(false)
-            addLog("Configuration missing - Resolvers: ${ipList.size}, Domain: ${domainName.isNotBlank()}", isError = true)
+            addLog("Config missing - Resolvers: ${ipList.size}, Domain: ${domainName.isNotBlank()}", isError = true)
             return
         }
 
@@ -403,7 +422,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        addLog("Starting service - Domain: $domainName, Resolvers: ${ipList.joinToString(", ")}, SOCKS5 Port: $socks5Port")
+        addLog("Starting - Domain: $domainName, Resolvers: ${ipList.joinToString(",")}, Port: $socks5Port")
 
         val vpnPrepareIntent = VpnService.prepare(this)
         if (vpnPrepareIntent != null) {
@@ -444,7 +463,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, serviceIntent)
         Utility.startVpn(this, dns)
         updateStatusUI("Starting...", "Waiting...")
-        addLog("VPN service started with DNS: $dns, SOCKS5 port: $socks5Port")
+        addLog("VPN started - DNS: $dns, SOCKS5: $socks5Port")
     }
 
     private fun updateStatusUI(slipstreamStatus: String? = null, socksStatus: String? = null) {
