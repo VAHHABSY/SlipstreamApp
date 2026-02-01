@@ -17,6 +17,18 @@ LOCAL_PATH := $(call my-dir)
 ROOT_PATH := $(LOCAL_PATH)
 
 ########################################################
+## libslipstream (PREBUILT)
+########################################################
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := slipstream
+LOCAL_SRC_FILES := $(TARGET_ARCH_ABI)/libslipstream.so
+LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)
+
+include $(PREBUILT_SHARED_LIBRARY)
+
+########################################################
 ## pdnsd library
 ########################################################
 
