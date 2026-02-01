@@ -29,23 +29,35 @@ jobs:
         echo "y" | sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
         echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.0.12077973" >> $GITHUB_ENV
         
+    - name: Verify prebuilt libraries exist
+      run: |
+        echo "Checking for libslipstream.so in jniLibs..."
+        ls -la app/src/main/jniLibs/arm64-v8a/
+        ls -la app/src/main/jniLibs/armeabi-v7a/
+        ls -la app/src/main/jniLibs/x86/
+        ls -la app/src/main/jniLibs/x86_64/
+        
     - name: Build native libraries with NDK
       run: |
         cd app/src/main/jni
         ${ANDROID_NDK_HOME}/ndk-build APP_ABI=arm64-v8a,armeabi-v7a,x86,x86_64
         cd ../../../..
         
+    - name: Copy built libraries to jniLibs
+      run: |
+        echo "Copying NDK-built libraries to jniLibs (preserving prebuilts)..."
+        cp -n app/src/main/libs/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/ || true
+        cp -n app/src/main/libs/armeabi-v7a/*.so app/src/main/jniLibs/armeabi-v7a/ || true
+        cp -n app/src/main/libs/x86/*.so app/src/main/jniLibs/x86/ || true
+        cp -n app/src/main/libs/x86_64/*.so app/src/main/jniLibs/x86_64/ || true
+        echo "Final jniLibs contents:"
+        ls -la app/src/main/jniLibs/arm64-v8a/
+        
     - name: Build Debug APK
-      uses: gradle/gradle-build-action@v2
-      with:
-        gradle-version: 8.2
-        arguments: assembleDebug --stacktrace
+      run: ./gradlew assembleDebug --stacktrace
         
     - name: Build Release APK
-      uses: gradle/gradle-build-action@v2
-      with:
-        gradle-version: 8.2
-        arguments: assembleRelease --stacktrace
+      run: ./gradlew assembleRelease --stacktrace
         
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
