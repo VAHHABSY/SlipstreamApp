@@ -98,7 +98,7 @@ class CommandService : Service() {
         return START_STICKY
     }
     
-    private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
+private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
     try {
         log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
         
@@ -112,40 +112,37 @@ class CommandService : Service() {
         log("[Service] Step 3: Binary exists: true")
         log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
         
-        // Auto-detect the correct linker
-val linkerPath = when {
-    File("/system/bin/linker64").exists() -> "/system/bin/linker64"
-    File("/system/bin/linker").exists() -> "/system/bin/linker"
-    else -> throw IOException("No linker found on device")
-}
-
-log("[Service] Step 5: Using linker: $linkerPath")
-
-val command = mutableListOf(
-    linkerPath,
-    sourceBinary.absolutePath,
-            domain,
-            resolvers,
-            "--socks-port",
-            port.toString()
+        // Copy to /data/local/tmp with simple name
+        val tmpBinary = File("/data/local/tmp/slipstream_bin")
+        log("[Service] Step 5: Copying to ${tmpBinary.absolutePath}")
+        
+        sourceBinary.inputStream().use { input ->
+            tmpBinary.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        
+        // Make it executable
+        Runtime.getRuntime().exec(arrayOf("chmod", "755", tmpBinary.absolutePath)).waitFor()
+        
+        log("[Service] Step 6: Binary copied and made executable")
+        
+        // Create simple shell script
+        val command = listOf(
+            "/system/bin/sh",
+            "-c",
+            "cd '${filesDir.absolutePath}' && LD_LIBRARY_PATH='${applicationInfo.nativeLibraryDir}' '${tmpBinary.absolutePath}' '$domain' '$resolvers' --socks-port $port"
         )
         
-        log("[Service] Step 6: Command: ${command.joinToString(" ")}")
+        log("[Service] Step 7: Starting process...")
         
         val processBuilder = ProcessBuilder(command)
             .directory(filesDir)
             .redirectErrorStream(true)
         
-        // Set environment variables for library loading
-        val env = processBuilder.environment()
-        env["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
-        
-        log("[Service] Step 7: LD_LIBRARY_PATH set to: ${applicationInfo.nativeLibraryDir}")
-        log("[Service] Step 8: Starting process...")
-        
         slipstreamProcess = processBuilder.start()
         
-        log("[Service] Step 9: Process started successfully")
+        log("[Service] Step 8: Process started")
         
         // Start monitoring
         startOutputMonitoring()
