@@ -7,14 +7,21 @@ android {
     namespace = "net.typeblob.socks"
     compileSdk = 34
 
-    defaultConfig {
+     defaultConfig {
         applicationId = "net.typeblob.socks"
         minSdk = 21
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            // Temporarily excluding 64-bit ARM. Uncomment when needed:
+            // "arm64-v8a",
+            abiFilters += listOf(
+                // "arm64-v8a", // <--- uncomment to re-enable!
+                "armeabi-v7a",
+                "x86",
+                "x86_64"
+            )
         }
     }
 
