@@ -99,64 +99,63 @@ class CommandService : Service() {
     }
     
     private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
-        try {
-            log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
-            
-            val sourceBinary = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
-            log("[Service] Step 2: Source binary: ${sourceBinary.absolutePath}")
-            
-            if (!sourceBinary.exists()) {
-                throw IOException("Binary not found at: ${sourceBinary.absolutePath}")
-            }
-            
-            log("[Service] Step 3: Binary exists: true")
-            log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
-            
-            // SOLUTION: Execute directly from native library directory using LD_PRELOAD trick
-            // The native lib directory has the correct SELinux context
-            
-            log("[Service] Step 5: Using direct execution from native lib dir")
-            
-            // Create a shell script wrapper that will execute the binary
-            val wrapperScript = File(filesDir, "run_slipstream.sh")
-            val scriptContent = """#!/system/bin/sh
-                export LD_LIBRARY_PATH="${applicationInfo.nativeLibraryDir}"
-                cd "${filesDir.absolutePath}"
-                exec "${sourceBinary.absolutePath}" "$domain" "$resolvers" --socks-port $port
-            """.trimIndent()
-            
-            wrapperScript.writeText(scriptContent)
-            wrapperScript.setExecutable(true, false)
-            
-            log("[Service] Step 6: Created wrapper script at ${wrapperScript.absolutePath}")
-            
-            // Execute using sh with the script
-            val command = listOf(
-                "/system/bin/sh",
-                wrapperScript.absolutePath
-            )
-            
-            log("[Service] Step 7: Command: ${command.joinToString(" ")}")
-            
-            val processBuilder = ProcessBuilder(command)
-                .directory(filesDir)
-                .redirectErrorStream(true)
-            
-            log("[Service] Step 8: Starting process...")
-            
-            slipstreamProcess = processBuilder.start()
-            
-            log("[Service] Step 9: Process started successfully")
-            
-            // Start monitoring
-            startOutputMonitoring()
-            
-        } catch (e: Exception) {
-            log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
-            throw e
+    try {
+        log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
+        
+        val sourceBinary = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
+        log("[Service] Step 2: Source binary: ${sourceBinary.absolutePath}")
+        
+        if (!sourceBinary.exists()) {
+            throw IOException("Binary not found at: ${sourceBinary.absolutePath}")
         }
+        
+        log("[Service] Step 3: Binary exists: true")
+        log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
+        
+        // Auto-detect the correct linker
+val linkerPath = when {
+    File("/system/bin/linker64").exists() -> "/system/bin/linker64"
+    File("/system/bin/linker").exists() -> "/system/bin/linker"
+    else -> throw IOException("No linker found on device")
+}
+
+log("[Service] Step 5: Using linker: $linkerPath")
+
+val command = mutableListOf(
+    linkerPath,
+    sourceBinary.absolutePath,
+            domain,
+            resolvers,
+            "--socks-port",
+            port.toString()
+        )
+        
+        log("[Service] Step 6: Command: ${command.joinToString(" ")}")
+        
+        val processBuilder = ProcessBuilder(command)
+            .directory(filesDir)
+            .redirectErrorStream(true)
+        
+        // Set environment variables for library loading
+        val env = processBuilder.environment()
+        env["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
+        
+        log("[Service] Step 7: LD_LIBRARY_PATH set to: ${applicationInfo.nativeLibraryDir}")
+        log("[Service] Step 8: Starting process...")
+        
+        slipstreamProcess = processBuilder.start()
+        
+        log("[Service] Step 9: Process started successfully")
+        
+        // Start monitoring
+        startOutputMonitoring()
+        
+    } catch (e: Exception) {
+        log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
+        e.printStackTrace()
+        throw e
     }
+}
     
     private fun startOutputMonitoring() {
         monitorJob?.cancel()
