@@ -1,5 +1,9 @@
 package net.typeblob.socks
 
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
 import android.Manifest
 import android.content.ComponentName
 import android.content.Context
@@ -425,73 +429,83 @@ class MainActivity : ComponentActivity() {
         )
     }
     
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun LogsBottomSheet(logs: List<String>, onDismiss: () -> Unit) {
-        val sheetState = rememberModalBottomSheetState()
-        val listState = rememberLazyListState()
-        val scope = rememberCoroutineScope()
-        
-        LaunchedEffect(logs.size) {
-            if (logs.isNotEmpty()) {
-                listState.animateScrollToItem(logs.size - 1)
-            }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LogsBottomSheet(logs: List<String>, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    val listState = rememberLazyListState()
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) {
+            // Using non-animated scroll for large lists to avoid jank
+            listState.scrollToItem(logs.size - 1)
         }
-        
-        ModalBottomSheet(
-            onDismissRequest = onDismiss,
-            sheetState = sheetState
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Logs", style = MaterialTheme.typography.titleLarge)
+                Text("Logs", style = MaterialTheme.typography.titleLarge)
+                Row {
+                    IconButton(
+                        onClick = {
+                            if (logs.isNotEmpty()) {
+                                val text = logs.joinToString("\n")
+                                clipboard.setText(AnnotatedString(text))
+                                Toast.makeText(context, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "No logs to copy", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy logs to clipboard")
+                    }
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                        Icon(Icons.Default.Close, contentDescription = "Close logs")
                     }
                 }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(400.dp),
-                    color = Color(0xFF1E1E1E),
-                    shape = RoundedCornerShape(8.dp)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(400.dp),
+                color = Color(0xFF1E1E1E),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.padding(8.dp)
                 ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.padding(8.dp)
-                    ) {
-                        items(logs) { log ->
-                            Text(
-                                text = log,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                color = when {
-                                    log.contains("✓") -> Color(0xFF4CAF50)
-                                    log.contains("❌") -> Color(0xFFF44336)
-                                    log.contains("⚠️") -> Color(0xFFFF9800)
-                                    log.contains("ℹ️") -> Color(0xFF2196F3)
-                                    else -> Color(0xFFE0E0E0)
-                                },
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            )
-                        }
+                    items(logs) { log ->
+                        Text(
+                            text = log,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFEEEEEE),
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
                 }
             }
         }
     }
+}
     
     private fun startTunnel(profile: Profile) {
         Log.d(TAG, "=== START BUTTON PRESSED ===")
