@@ -57,19 +57,18 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
         MainFunc main_func = reinterpret_cast<MainFunc>(dlsym(handle, "main"));
         
         if (main_func) {
-            // Construct argv
+            // Construct argv - keep portStr in scope for the entire call
             std::string portStr = std::to_string(port);
-            std::vector<const char*> args = {
-                "slipstream",
-                domain,
-                resolvers,
-                "--socks-port",
-                portStr.c_str(),
-                nullptr
-            };
+            std::vector<char*> args;
+            args.push_back(const_cast<char*>("slipstream"));
+            args.push_back(const_cast<char*>(domain));
+            args.push_back(const_cast<char*>(resolvers));
+            args.push_back(const_cast<char*>("--socks-port"));
+            args.push_back(const_cast<char*>(portStr.c_str()));
+            args.push_back(nullptr);
             
             LOGI("Found main, calling with argc=%d", (int)args.size() - 1);
-            result = main_func(args.size() - 1, const_cast<char**>(args.data()));
+            result = main_func(args.size() - 1, args.data());
             LOGI("main returned: %d", result);
         } else {
             LOGE("Neither slipstream_main nor main found in library: %s", dlerror());
@@ -77,7 +76,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
         }
     }
 
-    // Don't dlclose - the library may have spawned threads
+    // Don't dlclose - slipstream runs as a server and spawns threads
+    // The library needs to remain loaded for the lifetime of the app
     // dlclose(handle);
 
     env->ReleaseStringUTFChars(jLibPath, libPath);

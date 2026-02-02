@@ -13,18 +13,15 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
-import java.io.InputStreamReader
 
 class CommandService : Service() {
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private var slipstreamProcess: Process? = null
     private var slipstreamJob: Job? = null
-    private var monitorJob: Job? = null
+    private var isSlipstreamRunning = false
 
     private var statusCallback: ((SlipstreamStatus, SocksStatus) -> Unit)? = null
     private var logCallback: ((String) -> Unit)? = null
@@ -128,12 +125,12 @@ class CommandService : Service() {
                 startSlipstreamProcess(domain, resolvers, port)
                 delay(1000)
 
-                if (slipstreamProcess?.isAlive == true) {
+                if (isSlipstreamRunning) {
                     updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
                     updateNotification("Running", "SOCKS5 proxy on port $port")
                     log("[Service] Tunnel started successfully")
                 } else {
-                    throw IOException("Process terminated immediately")
+                    throw IOException("Slipstream failed to start")
                 }
 
             } catch (e: Exception) {
@@ -163,6 +160,9 @@ class CommandService : Service() {
             // Load and run slipstream via JNI instead of executing via linker
             log("[Service] Step 5: Loading library via JNI...")
             
+            // Mark as running before launching
+            isSlipstreamRunning = true
+            
             // Run in background thread since slipstream blocks while running
             slipstreamJob = scope.launch {
                 try {
@@ -180,42 +180,18 @@ class CommandService : Service() {
                     }
                 } catch (e: Exception) {
                     log("[Service] Slipstream error: ${e.message}")
+                } finally {
+                    isSlipstreamRunning = false
                 }
             }
 
             log("[Service] Step 6: Slipstream thread started")
 
-            // Create a dummy process to satisfy existing checks
-            // This is a no-op that keeps running
-            slipstreamProcess = ProcessBuilder(listOf("sleep", "infinity"))
-                .redirectErrorStream(true)
-                .start()
-
         } catch (e: Exception) {
             log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
+            isSlipstreamRunning = false
             e.printStackTrace()
             throw e
-        }
-    }
-
-    private fun startOutputMonitoring() {
-        monitorJob?.cancel()
-        monitorJob = scope.launch {
-            try {
-                val reader = BufferedReader(InputStreamReader(slipstreamProcess?.inputStream))
-
-                while (isActive) {
-                    val line = reader.readLine() ?: break
-                    log("[Slipstream] $line")
-                }
-
-                log("[Service] Process output stream ended")
-
-            } catch (e: Exception) {
-                if (isActive) {
-                    log("[Service] Output monitoring error: ${e.message}")
-                }
-            }
         }
     }
 
@@ -244,12 +220,7 @@ class CommandService : Service() {
         try {
             slipstreamJob?.cancel()
             slipstreamJob = null
-            
-            slipstreamProcess?.destroy()
-            slipstreamProcess = null
-
-            monitorJob?.cancel()
-            monitorJob = null
+            isSlipstreamRunning = false
 
             killSlipstreamProcesses()
 
