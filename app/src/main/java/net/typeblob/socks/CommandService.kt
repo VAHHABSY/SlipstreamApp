@@ -10,13 +10,11 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.system.Os
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import java.io.BufferedReader
-import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
 
@@ -24,7 +22,7 @@ class CommandService : Service() {
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private var slipstreamProcess: Process? = null
+    private var slipstreamJob: Job? = null
     private var monitorJob: Job? = null
 
     private var statusCallback: ((SlipstreamStatus, SocksStatus) -> Unit)? = null
@@ -113,29 +111,37 @@ class CommandService : Service() {
         }
 
         log("[Service] Service starting - Domain: $domain, Port: $port")
-
         startForeground(NOTIFICATION_ID, createNotification("Starting...", "Initializing proxy"))
 
         scope.launch {
             try {
-                // Clean up any existing processes
+                // Clean up before starting (best effort)
                 log("[Service] Cleaning up old processes...")
                 killSlipstreamProcesses()
 
                 updateStatus(SlipstreamStatus.Starting("Starting tunnel..."), SocksStatus.Waiting)
-                delay(500)
+                delay(200)
 
-                // Start slipstream
-                startSlipstreamProcess(domain, resolvers, port)
-                delay(1000)
-
-                if (slipstreamProcess?.isAlive == true) {
-                    updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
-                    updateNotification("Running", "SOCKS5 proxy on port $port")
-                    log("[Service] Tunnel started successfully")
-                } else {
-                    throw IOException("Process terminated immediately")
+                // Start slipstream via JNI in a background job to avoid blocking this coroutine
+                slipstreamJob?.cancel()
+                slipstreamJob = scope.launch(Dispatchers.Default) {
+                    log("[Service] Starting slipstream via JNI...")
+                    val rc = NativeRunner.runSlipstream(domain, resolvers, port)
+                    log("[Service] Slipstream JNI finished with rc=$rc")
+                    if (rc != 0) {
+                        updateStatus(SlipstreamStatus.Failed("Slipstream rc=$rc"), SocksStatus.Stopped)
+                        stopSelf()
+                    }
                 }
+
+                // Consider it running once started
+                delay(1000)
+                updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
+                updateNotification("Running", "SOCKS5 proxy on port $port")
+                log("[Service] Tunnel started successfully")
+
+                // No external process output to monitor; optional placeholder
+                startOutputMonitoringPlaceholder()
 
             } catch (e: Exception) {
                 log("[Service] ERROR: ${e.javaClass.simpleName} - ${e.message}")
@@ -147,110 +153,23 @@ class CommandService : Service() {
         return START_STICKY
     }
 
-    private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
-        try {
-            log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
-
-            val sourceBinary = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
-            log("[Service] Step 2: Source binary: ${sourceBinary.absolutePath}")
-
-            if (!sourceBinary.exists()) {
-                throw IOException("Binary not found at: ${sourceBinary.absolutePath}")
-            }
-
-            log("[Service] Step 3: Binary exists: true")
-            log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
-
-            // Copy to app-private dir instead of /data/local/tmp
-            val destBinary = File(filesDir, "slipstream_bin")
-            log("[Service] Step 5: Copying to ${destBinary.absolutePath}")
-
-            sourceBinary.inputStream().use { input ->
-                destBinary.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            // Make it executable (prefer Os.chmod, fallback to system chmod).
-            // Use OsConstants flags to avoid unsupported octal literals in Kotlin.
-            try {
-                val mode700 = OsConstants.S_IRUSR or OsConstants.S_IWUSR or OsConstants.S_IXUSR // 0700
-                Os.chmod(destBinary.absolutePath, mode700)
-            } catch (_: Throwable) {
-                Runtime.getRuntime()
-                    .exec(arrayOf("/system/bin/chmod", "700", destBinary.absolutePath))
-                    .waitFor()
-            }
-
-            log("[Service] Step 6: Binary copied and made executable")
-
-            // Use dynamic linker to execute the shared object reliably
-            val linker = if (Build.SUPPORTED_64_BIT_ABIS.isNotEmpty())
-                "/system/bin/linker64" else "/system/bin/linker"
-
-            // Build command; pass arguments explicitly
-            val command = listOf(
-                linker,
-                destBinary.absolutePath,
-                domain,
-                resolvers,
-                "--socks-port", port.toString()
-            )
-
-            log("[Service] Step 7: Starting process via linker...")
-
-            val processBuilder = ProcessBuilder(command)
-                .directory(filesDir)
-                .redirectErrorStream(true)
-
-            // Ensure LD_LIBRARY_PATH points to nativeLibraryDir so dependencies resolve
-            val env = processBuilder.environment()
-            env["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
-
-            slipstreamProcess = processBuilder.start()
-
-            log("[Service] Step 8: Process started")
-
-            // Start monitoring
-            startOutputMonitoring()
-
-        } catch (e: Exception) {
-            log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
-            throw e
-        }
-    }
-
-    private fun startOutputMonitoring() {
+    // Placeholder: keep structure consistent; JNI runs in-process, so there's no external stdout to read
+    private fun startOutputMonitoringPlaceholder() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
-            try {
-                val reader = BufferedReader(InputStreamReader(slipstreamProcess?.inputStream))
-
-                while (isActive) {
-                    val line = reader.readLine() ?: break
-                    log("[Slipstream] $line")
-                }
-
-                log("[Service] Process output stream ended")
-
-            } catch (e: Exception) {
-                if (isActive) {
-                    log("[Service] Output monitoring error: ${e.message}")
-                }
-            }
+            // You can add periodic status checks here if the native code exposes signals/events
+            delay(1000)
         }
     }
 
     private fun killSlipstreamProcesses() {
-        // Try multiple variants; ignore errors if command not present
+        // Previously attempted killall on external binaries; now running in-process via JNI.
+        // Keep no-op or remove if not needed.
         val commands = listOf(
             arrayOf("killall", "slipstream"),
             arrayOf("/system/bin/killall", "slipstream"),
             arrayOf("toybox", "killall", "slipstream"),
-            arrayOf("busybox", "killall", "slipstream"),
-            arrayOf("killall", "libslipstream.so"),
-            arrayOf("/system/bin/killall", "libslipstream.so")
+            arrayOf("busybox", "killall", "slipstream")
         )
         for (cmd in commands) {
             try {
@@ -265,8 +184,8 @@ class CommandService : Service() {
         log("[Service] Stopping tunnel...")
 
         try {
-            slipstreamProcess?.destroy()
-            slipstreamProcess = null
+            slipstreamJob?.cancel()
+            slipstreamJob = null
 
             monitorJob?.cancel()
             monitorJob = null
@@ -274,7 +193,6 @@ class CommandService : Service() {
             killSlipstreamProcesses()
 
             updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
-
         } catch (e: Exception) {
             log("[Service] Stop error: ${e.message}")
         }
