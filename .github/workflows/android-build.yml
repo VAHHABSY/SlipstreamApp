@@ -56,16 +56,11 @@ jobs:
         echo "Final jniLibs contents (arm64-v8a):"
         ls -la app/src/main/jniLibs/arm64-v8a/
 
-    # No splits modification, 'splits' must be present in Groovy build.gradle, not in .kts or added by script!
-
     - name: Build Debug APK
       run: ./gradlew assembleDebug --stacktrace --no-daemon
 
     - name: Build Release APK
       run: ./gradlew assembleRelease --stacktrace --no-daemon
-
-    - name: Build Release AAB (Bundle)
-      run: ./gradlew bundleRelease --stacktrace --no-daemon
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
@@ -79,53 +74,6 @@ jobs:
         name: app-release
         path: app/build/outputs/apk/release/app-release-unsigned.apk
 
-    - name: Upload Release AAB
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-release-aab
-        path: app/build/outputs/bundle/release/app-release.aab
-
-    # Optional: Generate and upload device-agnostic, per-ABI APK splits using bundletool
-    - name: Download bundletool
-      run: |
-        curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/1.15.6/bundletool-all-1.15.6.jar
-
-    - name: Generate per-ABI APKs from AAB using bundletool
-      run: |
-        java -jar bundletool.jar build-apks \
-          --bundle=app/build/outputs/bundle/release/app-release.aab \
-          --output=app/build/outputs/bundle/release/app-release.apks \
-          --mode=universal \
-          --overwrite \
-          --ks=debug.keystore \
-          --ks-pass=pass:android \
-          --ks-key-alias=androiddebugkey \
-          --key-pass=pass:android || true
-
-        java -jar bundletool.jar build-apks \
-          --bundle=app/build/outputs/bundle/release/app-release.aab \
-          --output=app/build/outputs/bundle/release/app-splits.apks \
-          --mode=default \
-          --overwrite \
-          --ks=debug.keystore \
-          --ks-pass=pass:android \
-          --ks-key-alias=androiddebugkey \
-          --key-pass=pass:android || true
-
-    - name: Unzip universal APKs (if generated)
-      run: |
-        unzip -o app/build/outputs/bundle/release/app-release.apks -d app/build/outputs/bundle/release/universal-apks/ || true
-        unzip -o app/build/outputs/bundle/release/app-splits.apks -d app/build/outputs/bundle/release/split-apks/ || true
-
-    - name: Upload universal and split APKs (if present)
-      uses: actions/upload-artifact@v4
-      with:
-        name: per-abi-universal-apks
-        path: |
-          app/build/outputs/bundle/release/universal-apks/universal.apk
-          app/build/outputs/bundle/release/split-apks/*.apk
-        if-no-files-found: ignore
-
     - name: Create Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: softprops/action-gh-release@v1
@@ -135,8 +83,5 @@ jobs:
         files: |
           app/build/outputs/apk/debug/app-debug.apk
           app/build/outputs/apk/release/app-release-unsigned.apk
-          app/build/outputs/bundle/release/app-release.aab
-          app/build/outputs/bundle/release/universal-apks/universal.apk
-          app/build/outputs/bundle/release/split-apks/*.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
