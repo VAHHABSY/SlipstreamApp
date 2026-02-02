@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <string>
 #include <vector>
+#include <cstring>
 
 #define LOG_TAG "NativeRunner"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -57,19 +58,29 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
         MainFunc main_func = reinterpret_cast<MainFunc>(dlsym(handle, "main"));
         
         if (main_func) {
-            // Construct argv - keep portStr in scope for the entire call
+            // Construct argv with mutable copies of all strings
+            // We need to create mutable copies because main() may modify argv
             std::string portStr = std::to_string(port);
-            std::vector<char*> args;
-            args.push_back(const_cast<char*>("slipstream"));
-            args.push_back(const_cast<char*>(domain));
-            args.push_back(const_cast<char*>(resolvers));
-            args.push_back(const_cast<char*>("--socks-port"));
-            args.push_back(const_cast<char*>(portStr.c_str()));
-            args.push_back(nullptr);
             
-            LOGI("Found main, calling with argc=%d", (int)args.size() - 1);
-            result = main_func(args.size() - 1, args.data());
+            // Create array of mutable string copies
+            char* argv0 = strdup("slipstream");
+            char* argv1 = strdup(domain);
+            char* argv2 = strdup(resolvers);
+            char* argv3 = strdup("--socks-port");
+            char* argv4 = strdup(portStr.c_str());
+            
+            char* args[] = { argv0, argv1, argv2, argv3, argv4, nullptr };
+            
+            LOGI("Found main, calling with argc=5");
+            result = main_func(5, args);
             LOGI("main returned: %d", result);
+            
+            // Free the allocated strings
+            free(argv0);
+            free(argv1);
+            free(argv2);
+            free(argv3);
+            free(argv4);
         } else {
             LOGE("Neither slipstream_main nor main found in library: %s", dlerror());
             result = -2;
