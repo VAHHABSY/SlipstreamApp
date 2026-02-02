@@ -119,8 +119,7 @@ class CommandService : Service() {
             
             // Create a shell script wrapper that will execute the binary
             val wrapperScript = File(filesDir, "run_slipstream.sh")
-            val scriptContent = """
-                #!/system/bin/sh
+            val scriptContent = """#!/system/bin/sh
                 export LD_LIBRARY_PATH="${applicationInfo.nativeLibraryDir}"
                 cd "${filesDir.absolutePath}"
                 exec "${sourceBinary.absolutePath}" "$domain" "$resolvers" --socks-port $port
