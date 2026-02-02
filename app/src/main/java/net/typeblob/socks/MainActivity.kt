@@ -50,24 +50,47 @@ class MainActivity : ComponentActivity() {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             Log.d(TAG, "Service connected")
-            val binder = service as CommandService.LocalBinder
+            // Safe cast the binder to avoid ClassCastException if binder type is unexpected
+            val binder = service as? CommandService.LocalBinder
+            if (binder == null) {
+                Log.e(TAG, "Service binder is not CommandService.LocalBinder — unexpected binder type")
+                addLog("❌ Service binder type mismatch")
+                return
+            }
+
             commandService = binder.getService()
             isBound = true
-            
+
+            // Ensure callbacks update Compose state on the main thread.
             commandService?.setStatusCallback { slipstream, socks ->
-                slipstreamStatus = slipstream
-                socksStatus = socks
+                runOnUiThread {
+                    slipstreamStatus = slipstream
+                    socksStatus = socks
+                }
             }
-            
+
             commandService?.setLogCallback { message ->
-                logs = logs + message
+                // Update UI-related state on main thread
+                runOnUiThread {
+                    // Keep log growth bounded to avoid unbounded memory use (optional)
+                    val maxLines = 1000
+                    val newLogs = logs + message
+                    logs = if (newLogs.size > maxLines) {
+                        newLogs.takeLast(maxLines)
+                    } else {
+                        newLogs
+                    }
+                }
             }
+
+            addLog("✓ Bound to CommandService")
         }
         
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.d(TAG, "Service disconnected")
             commandService = null
             isBound = false
+            addLog("❌ Service disconnected")
         }
     }
     
@@ -109,15 +132,25 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         Log.d(TAG, "onStart - binding to service")
         val intent = Intent(this, CommandService::class.java)
-        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        try {
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        } catch (e: Exception) {
+            Log.e(TAG, "bindService failed", e)
+            addLog("❌ bindService failed: ${e.message}")
+        }
     }
     
     override fun onStop() {
         super.onStop()
         Log.d(TAG, "onStop - unbinding from service")
         if (isBound) {
-            unbindService(serviceConnection)
+            try {
+                unbindService(serviceConnection)
+            } catch (e: Exception) {
+                Log.e(TAG, "unbindService failed", e)
+            }
             isBound = false
+            commandService = null
         }
     }
     
@@ -144,7 +177,13 @@ class MainActivity : ComponentActivity() {
             .format(java.util.Date())
         val logMessage = "[$timestamp] $message"
         Log.d(TAG, "Log: $message")
-        logs = logs + logMessage
+        // Update list on UI thread (in case called from background)
+        runOnUiThread {
+            // Keep list bounded (optional)
+            val maxLines = 1000
+            val newLogs = logs + logMessage
+            logs = if (newLogs.size > maxLines) newLogs.takeLast(maxLines) else newLogs
+        }
     }
     
     @Composable
@@ -429,83 +468,83 @@ class MainActivity : ComponentActivity() {
         )
     }
     
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LogsBottomSheet(logs: List<String>, onDismiss: () -> Unit) {
-    val sheetState = rememberModalBottomSheetState()
-    val listState = rememberLazyListState()
-    val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun LogsBottomSheet(logs: List<String>, onDismiss: () -> Unit) {
+        val sheetState = rememberModalBottomSheetState()
+        val listState = rememberLazyListState()
+        val clipboard = LocalClipboardManager.current
+        val context = LocalContext.current
 
-    LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) {
-            // Using non-animated scroll for large lists to avoid jank
-            listState.scrollToItem(logs.size - 1)
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Logs", style = MaterialTheme.typography.titleLarge)
-                Row {
-                    IconButton(
-                        onClick = {
-                            if (logs.isNotEmpty()) {
-                                val text = logs.joinToString("\n")
-                                clipboard.setText(AnnotatedString(text))
-                                Toast.makeText(context, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "No logs to copy", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy logs to clipboard")
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close logs")
-                    }
-                }
+        LaunchedEffect(logs.size) {
+            if (logs.isNotEmpty()) {
+                // Using non-animated scroll for large lists to avoid jank
+                listState.scrollToItem(logs.size - 1)
             }
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Surface(
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(400.dp),
-                color = Color(0xFF1E1E1E),
-                shape = RoundedCornerShape(8.dp)
+                    .padding(16.dp)
             ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.padding(8.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(logs) { log ->
-                        Text(
-                            text = log,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFEEEEEE),
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
+                    Text("Logs", style = MaterialTheme.typography.titleLarge)
+                    Row {
+                        IconButton(
+                            onClick = {
+                                if (logs.isNotEmpty()) {
+                                    val text = logs.joinToString("\n")
+                                    clipboard.setText(AnnotatedString(text))
+                                    Toast.makeText(context, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "No logs to copy", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy logs to clipboard")
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close logs")
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(400.dp),
+                    color = Color(0xFF1E1E1E),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.padding(8.dp)
+                    ) {
+                        items(logs) { log ->
+                            Text(
+                                text = log,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFEEEEEE),
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
                     }
                 }
             }
         }
     }
-}
     
     private fun startTunnel(profile: Profile) {
         Log.d(TAG, "=== START BUTTON PRESSED ===")
@@ -530,6 +569,7 @@ fun LogsBottomSheet(logs: List<String>, onDismiss: () -> Unit) {
         
         try {
             Log.d(TAG, "Attempting to start foreground service...")
+            // On API >= O, startForegroundService is required and the service must call startForeground quickly.
             startForegroundService(intent)
             Log.d(TAG, "Service started successfully")
             
