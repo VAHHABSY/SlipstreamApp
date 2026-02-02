@@ -27,9 +27,13 @@ android {
                 "proguard-rules.pro"
             )
         }
-        debug {
-            // Defaults
-        }
+    }
+
+    buildFeatures {
+        compose = true
+    }
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.3"
     }
 
     externalNativeBuild {
@@ -58,5 +62,23 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    // Add any others as needed
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
+
+    // Jetpack Compose - Core and Foundation
+    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation("androidx.compose.ui:ui:1.5.4")
+    implementation("androidx.compose.runtime:runtime:1.5.4")
+    implementation("androidx.compose.foundation:foundation:1.5.4")
+    implementation("androidx.compose.foundation:foundation-layout:1.5.4")
+
+    // Compose Material and Material3
+    implementation("androidx.compose.material:material:1.5.4")
+    implementation("androidx.compose.material:material-icons-core:1.5.4")
+    implementation("androidx.compose.material:material-icons-extended:1.5.4")
+    implementation("androidx.compose.material3:material3:1.2.0")
+
+    // Compose tooling
+    implementation("androidx.compose.ui:ui-tooling-preview:1.5.4")
+    debugImplementation("androidx.compose.ui:ui-tooling:1.5.4")
 }
