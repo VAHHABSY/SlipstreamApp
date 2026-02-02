@@ -17,8 +17,8 @@ android {
             // Temporarily excluding 64-bit ARM. Uncomment when needed:
             // "arm64-v8a",
             abiFilters += listOf(
-                // "arm64-v8a", // <--- uncomment to re-enable!
-                "armeabi-v7a",
+                "arm64-v8a", // <--- uncomment to re-enable!
+             // "armeabi-v7a",
                 "x86",
                 "x86_64"
             )
