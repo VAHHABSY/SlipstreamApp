@@ -64,6 +64,20 @@ LOCAL_STATIC_LIBRARIES := cpufeatures libancillary
 include $(BUILD_SHARED_LIBRARY)
 
 ########################################################
+## native_runner
+########################################################
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := native_runner
+
+LOCAL_SRC_FILES := ../cpp/native_runner.cpp
+
+LOCAL_LDLIBS := -ldl -llog
+
+include $(BUILD_SHARED_LIBRARY)
+
+########################################################
 ## tun2socks
 ########################################################
 
