@@ -49,7 +49,11 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
         LOGI("Found slipstream_main, calling with domain=%s, resolvers=%s, port=%d", 
              domain, resolvers, port);
         result = slipstream_main(domain, resolvers, port);
-        LOGI("slipstream_main returned: %d", result);
+        if (result != 0) {
+            LOGE("slipstream_main failed with code: %d", result);
+        } else {
+            LOGI("slipstream_main completed successfully");
+        }
     } else {
         LOGI("slipstream_main not found, trying main function");
         
@@ -73,7 +77,11 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
             
             LOGI("Found main, calling with argc=5");
             result = main_func(5, args);
-            LOGI("main returned: %d", result);
+            if (result != 0) {
+                LOGE("main failed with code: %d", result);
+            } else {
+                LOGI("main completed successfully");
+            }
             
             // Free the allocated strings
             free(argv0);

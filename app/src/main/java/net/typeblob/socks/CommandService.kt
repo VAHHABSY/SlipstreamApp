@@ -175,13 +175,19 @@ class CommandService : Service() {
                     
                     if (result == 0) {
                         log("[Service] Slipstream completed successfully")
+                    } else if (result == -1) {
+                        log("[Service] Slipstream failed: Could not load library (dlopen failed)")
+                    } else if (result == -2) {
+                        log("[Service] Slipstream failed: No main or slipstream_main function found")
                     } else {
-                        log("[Service] Slipstream returned code: $result")
+                        log("[Service] Slipstream returned error code: $result")
                     }
                 } catch (e: Exception) {
                     log("[Service] Slipstream error: ${e.message}")
                 } finally {
                     isSlipstreamRunning = false
+                    log("[Service] Slipstream stopped, updating status")
+                    updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
                 }
             }
 
