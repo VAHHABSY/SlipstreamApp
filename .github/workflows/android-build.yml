@@ -56,10 +56,10 @@ jobs:
         echo "Final jniLibs contents (arm64-v8a):"
         ls -la app/src/main/jniLibs/arm64-v8a/
 
-    # Ensure ABI splits are configured in app/build.gradle
+    # Ensure ABI splits are configured in app/build.gradle.kts
     - name: Add per-ABI APKs build configuration (if not already present)
       run: |
-        if ! grep -q "splits.abi.enable = true" app/build.gradle; then
+        if ! grep -q "splits.abi.enable = true" app/build.gradle.kts; then
           sed -i '/android {/a \
           \    splits {\
           \        abi {\
@@ -68,8 +68,8 @@ jobs:
           \            reset()\
           \            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"\
           \        }\
-          \    }' app/build.gradle
-          cat app/build.gradle
+          \    }' app/build.gradle.kts
+          cat app/build.gradle.kts
         fi
 
     - name: Build per-ABI Debug APKs
