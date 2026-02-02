@@ -33,7 +33,8 @@ android {
         compose = true
     }
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.3"
+        // Compatible with Kotlin 1.9.22
+        kotlinCompilerExtensionVersion = "1.5.10"
     }
 
     externalNativeBuild {
@@ -71,7 +72,10 @@ dependencies {
     implementation("androidx.compose.runtime:runtime:1.5.4")
     implementation("androidx.compose.foundation:foundation:1.5.4")
     implementation("androidx.compose.foundation:foundation-layout:1.5.4")
-
+    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    implementation("androidx.activity:activity-compose")
+    implementation("androidx.compose.material3:material3")
+    
     // Compose Material and Material3
     implementation("androidx.compose.material:material:1.5.4")
     implementation("androidx.compose.material:material-icons-core:1.5.4")
