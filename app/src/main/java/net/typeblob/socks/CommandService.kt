@@ -112,46 +112,48 @@ class CommandService : Service() {
             log("[Service] Step 3: Binary exists: true")
             log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
             
-            // Create symlink or copy to files directory with simple name
+            // Copy to files directory
             val executablePath = File(filesDir, "slipstream")
             
-            // Remove old file if exists
+            log("[Service] Step 5: Copying binary to ${executablePath.absolutePath}")
+            
+            // Always copy to ensure fresh binary
             if (executablePath.exists()) {
                 executablePath.delete()
             }
             
-            log("[Service] Step 5: Creating symlink...")
-            
-            // Try to create symlink first
-            var symlinkSuccess = false
-            try {
-                val createSymlink = Runtime.getRuntime().exec(arrayOf(
-                    "ln", "-s", sourceBinary.absolutePath, executablePath.absolutePath
-                ))
-                val exitCode = createSymlink.waitFor()
-                symlinkSuccess = (exitCode == 0 && executablePath.exists())
-                log("[Service] Step 5a: Symlink result: $symlinkSuccess")
-            } catch (e: Exception) {
-                log("[Service] Step 5a: Symlink failed: ${e.message}")
-            }
-            
-            // Fallback: copy the binary if symlink failed
-            if (!symlinkSuccess) {
-                log("[Service] Step 5b: Copying binary instead...")
-                sourceBinary.inputStream().use { input ->
-                    executablePath.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
+            sourceBinary.inputStream().use { input ->
+                executablePath.outputStream().use { output ->
+                    input.copyTo(output)
                 }
-                executablePath.setExecutable(true, false)
-                executablePath.setReadable(true, false)
-                log("[Service] Step 5c: Copy completed: ${executablePath.length()} bytes")
             }
             
-            log("[Service] Step 6: Executable ready at: ${executablePath.absolutePath}")
+            log("[Service] Step 6: Copy completed (${executablePath.length()} bytes)")
             
-            // Build command with relative path
-            val shellCommand = "cd '${filesDir.absolutePath}' && LD_LIBRARY_PATH='${applicationInfo.nativeLibraryDir}' ./slipstream '$domain' '$resolvers' --socks-port $port"
+            // Set permissions using multiple methods
+            executablePath.setExecutable(true, false)
+            executablePath.setReadable(true, false)
+            executablePath.setWritable(true, true)
+            
+            log("[Service] Step 7: Set permissions (Java)")
+            
+            // Try chmod 777 for maximum permissions
+            try {
+                val chmodProcess = Runtime.getRuntime().exec(arrayOf("chmod", "777", executablePath.absolutePath))
+                val chmodResult = chmodProcess.waitFor()
+                log("[Service] Step 8: chmod 777 result: $chmodResult")
+            } catch (e: Exception) {
+                log("[Service] Step 8: chmod failed: ${e.message}")
+            }
+            
+            // Verify file exists and is readable
+            log("[Service] Step 9: File exists: ${executablePath.exists()}")
+            log("[Service] Step 10: File size: ${executablePath.length()}")
+            log("[Service] Step 11: Can read: ${executablePath.canRead()}")
+            log("[Service] Step 12: Can execute: ${executablePath.canExecute()}")
+            
+            // Use absolute path in shell command
+            val shellCommand = "cd '${filesDir.absolutePath}' && LD_LIBRARY_PATH='${applicationInfo.nativeLibraryDir}' '${executablePath.absolutePath}' '$domain' '$resolvers' --socks-port $port"
             
             val command = listOf(
                 "/system/bin/sh",
@@ -159,17 +161,15 @@ class CommandService : Service() {
                 shellCommand
             )
             
-            log("[Service] Step 7: Shell command ready")
+            log("[Service] Step 13: Starting process...")
             
             val processBuilder = ProcessBuilder(command)
                 .directory(filesDir)
                 .redirectErrorStream(true)
             
-            log("[Service] Step 8: Starting process via shell...")
-            
             slipstreamProcess = processBuilder.start()
             
-            log("[Service] Step 9: Process started successfully")
+            log("[Service] Step 14: Process started (PID: ${slipstreamProcess?.hashCode()})")
             
             // Start monitoring
             startOutputMonitoring()
