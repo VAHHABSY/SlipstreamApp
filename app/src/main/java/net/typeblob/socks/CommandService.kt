@@ -10,20 +10,18 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import java.io.BufferedReader
+import java.io.File
 import java.io.IOException
-import java.io.InputStreamReader
 
 class CommandService : Service() {
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var slipstreamJob: Job? = null
-    private var monitorJob: Job? = null
+    private var isSlipstreamRunning = false
 
     private var statusCallback: ((SlipstreamStatus, SocksStatus) -> Unit)? = null
     private var logCallback: ((String) -> Unit)? = null
@@ -111,37 +109,29 @@ class CommandService : Service() {
         }
 
         log("[Service] Service starting - Domain: $domain, Port: $port")
+
         startForeground(NOTIFICATION_ID, createNotification("Starting...", "Initializing proxy"))
 
         scope.launch {
             try {
-                // Clean up before starting (best effort)
+                // Clean up any existing processes
                 log("[Service] Cleaning up old processes...")
                 killSlipstreamProcesses()
 
                 updateStatus(SlipstreamStatus.Starting("Starting tunnel..."), SocksStatus.Waiting)
-                delay(200)
+                delay(500)
 
-                // Start slipstream via JNI in a background job to avoid blocking this coroutine
-                slipstreamJob?.cancel()
-                slipstreamJob = scope.launch(Dispatchers.Default) {
-                    log("[Service] Starting slipstream via JNI...")
-                    val rc = NativeRunner.runSlipstream(domain, resolvers, port)
-                    log("[Service] Slipstream JNI finished with rc=$rc")
-                    if (rc != 0) {
-                        updateStatus(SlipstreamStatus.Failed("Slipstream rc=$rc"), SocksStatus.Stopped)
-                        stopSelf()
-                    }
-                }
-
-                // Consider it running once started
+                // Start slipstream
+                startSlipstreamProcess(domain, resolvers, port)
                 delay(1000)
-                updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
-                updateNotification("Running", "SOCKS5 proxy on port $port")
-                log("[Service] Tunnel started successfully")
 
-                // No external process output to monitor; optional placeholder
-                startOutputMonitoringPlaceholder()
+                if (isSlipstreamRunning) {
+                    updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
+                    updateNotification("Running", "SOCKS5 proxy on port $port")
+                    log("[Service] Tunnel started successfully")
+                } else {
+                    throw IOException("Slipstream failed to start")
+                }
 
             } catch (e: Exception) {
                 log("[Service] ERROR: ${e.javaClass.simpleName} - ${e.message}")
@@ -153,23 +143,73 @@ class CommandService : Service() {
         return START_STICKY
     }
 
-    // Placeholder: keep structure consistent; JNI runs in-process, so there's no external stdout to read
-    private fun startOutputMonitoringPlaceholder() {
-        monitorJob?.cancel()
-        monitorJob = scope.launch {
-            // You can add periodic status checks here if the native code exposes signals/events
-            delay(1000)
+    private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
+        try {
+            log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
+
+            val libPath = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
+            log("[Service] Step 2: Library path: ${libPath.absolutePath}")
+
+            if (!libPath.exists()) {
+                throw IOException("Library not found at: ${libPath.absolutePath}")
+            }
+
+            log("[Service] Step 3: Library exists: true")
+            log("[Service] Step 4: Library size: ${libPath.length()} bytes")
+
+            // Load and run slipstream via JNI instead of executing via linker
+            log("[Service] Step 5: Loading library via JNI...")
+            
+            // Mark as running before launching
+            isSlipstreamRunning = true
+            
+            // Run in background thread since slipstream blocks while running
+            slipstreamJob = scope.launch {
+                try {
+                    val result = NativeRunner.runSlipstream(
+                        libPath.absolutePath,
+                        domain,
+                        resolvers,
+                        port
+                    )
+                    
+                    if (result == 0) {
+                        log("[Service] Slipstream completed successfully")
+                    } else if (result == -1) {
+                        log("[Service] Slipstream failed: Could not load library (dlopen failed)")
+                    } else if (result == -2) {
+                        log("[Service] Slipstream failed: No main or slipstream_main function found")
+                    } else {
+                        log("[Service] Slipstream returned error code: $result")
+                    }
+                } catch (e: Exception) {
+                    log("[Service] Slipstream error: ${e.message}")
+                } finally {
+                    isSlipstreamRunning = false
+                    log("[Service] Slipstream stopped, updating status")
+                    updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
+                }
+            }
+
+            log("[Service] Step 6: Slipstream thread started")
+
+        } catch (e: Exception) {
+            log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
+            isSlipstreamRunning = false
+            e.printStackTrace()
+            throw e
         }
     }
 
     private fun killSlipstreamProcesses() {
-        // Previously attempted killall on external binaries; now running in-process via JNI.
-        // Keep no-op or remove if not needed.
+        // Try multiple variants; ignore errors if command not present
         val commands = listOf(
             arrayOf("killall", "slipstream"),
             arrayOf("/system/bin/killall", "slipstream"),
             arrayOf("toybox", "killall", "slipstream"),
-            arrayOf("busybox", "killall", "slipstream")
+            arrayOf("busybox", "killall", "slipstream"),
+            arrayOf("killall", "libslipstream.so"),
+            arrayOf("/system/bin/killall", "libslipstream.so")
         )
         for (cmd in commands) {
             try {
@@ -186,13 +226,12 @@ class CommandService : Service() {
         try {
             slipstreamJob?.cancel()
             slipstreamJob = null
-
-            monitorJob?.cancel()
-            monitorJob = null
+            isSlipstreamRunning = false
 
             killSlipstreamProcesses()
 
             updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
+
         } catch (e: Exception) {
             log("[Service] Stop error: ${e.message}")
         }

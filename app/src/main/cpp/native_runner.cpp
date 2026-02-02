@@ -1,59 +1,107 @@
 #include <jni.h>
+#include <android/log.h>
 #include <dlfcn.h>
 #include <string>
 #include <vector>
-#include <android/log.h>
+#include <cstring>
 
-#define LOG_TAG "SlipstreamJNI"
+#define LOG_TAG "NativeRunner"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-typedef int (*slipstream_entry_t)(const char*, const char*, int);
-typedef int (*main_entry_t)(int, char**);
-
-extern "C"
-JNIEXPORT jint JNICALL
-Java_net_typeblob_socks_NativeRunner_runSlipstream(JNIEnv* env, jobject /*thiz*/,
-                                                   jstring jDomain, jstring jResolvers, jint port) {
+extern "C" JNIEXPORT jint JNICALL
+Java_net_typeblob_socks_NativeRunner_runSlipstream(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring jLibPath,
+    jstring jDomain,
+    jstring jResolvers,
+    jint jPort) {
+    
+    const char* libPath = env->GetStringUTFChars(jLibPath, nullptr);
     const char* domain = env->GetStringUTFChars(jDomain, nullptr);
     const char* resolvers = env->GetStringUTFChars(jResolvers, nullptr);
+    int port = static_cast<int>(jPort);
 
-    void* handle = dlopen("libslipstream.so", RTLD_NOW);
+    LOGI("Loading library: %s", libPath);
+    LOGI("Domain: %s, Resolvers: %s, Port: %d", domain, resolvers, port);
+
+    // Open the library
+    void* handle = dlopen(libPath, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
-        LOGE("dlopen failed: %s", dlerror());
+        LOGE("Failed to dlopen %s: %s", libPath, dlerror());
+        env->ReleaseStringUTFChars(jLibPath, libPath);
         env->ReleaseStringUTFChars(jDomain, domain);
         env->ReleaseStringUTFChars(jResolvers, resolvers);
         return -1;
     }
 
-    dlerror(); // clear
-    slipstream_entry_t slip = reinterpret_cast<slipstream_entry_t>(dlsym(handle, "slipstream_main"));
-    const char* symErr = dlerror();
+    LOGI("Library loaded successfully");
 
-    int rc = -3;
-    if (slip && !symErr) {
-        LOGI("Calling slipstream_main(domain=%s, resolvers=%s, port=%d)", domain, resolvers, (int)port);
-        rc = slip(domain, resolvers, port);
-    } else {
-        dlerror();
-        main_entry_t mainFn = reinterpret_cast<main_entry_t>(dlsym(handle, "main"));
-        const char* symErr2 = dlerror();
-        if (mainFn && !symErr2) {
-            LOGI("Calling main(argc/argv) fallback");
-            std::vector<std::string> args = {"slipstream", domain, resolvers, "--socks-port", std::to_string(port)};
-            std::vector<char*> argv;
-            argv.reserve(args.size());
-            for (auto& s : args) argv.push_back(const_cast<char*>(s.c_str()));
-            rc = mainFn((int)argv.size(), argv.data());
+    int result = -1;
+
+    // Try to resolve slipstream_main first
+    typedef int (*SlipstreamMainFunc)(const char*, const char*, int);
+    SlipstreamMainFunc slipstream_main = 
+        reinterpret_cast<SlipstreamMainFunc>(dlsym(handle, "slipstream_main"));
+
+    if (slipstream_main) {
+        LOGI("Found slipstream_main, calling with domain=%s, resolvers=%s, port=%d", 
+             domain, resolvers, port);
+        result = slipstream_main(domain, resolvers, port);
+        if (result != 0) {
+            LOGE("slipstream_main failed with code: %d", result);
         } else {
-            LOGE("dlsym failed: %s", symErr2 ? symErr2 : symErr ? symErr : "entry not found");
-            rc = -2;
+            LOGI("slipstream_main completed successfully");
+        }
+    } else {
+        LOGI("slipstream_main not found, trying main function");
+        
+        // Fallback to main function
+        typedef int (*MainFunc)(int, char**);
+        MainFunc main_func = reinterpret_cast<MainFunc>(dlsym(handle, "main"));
+        
+        if (main_func) {
+            // Construct argv with mutable copies of all strings
+            // We need to create mutable copies because main() may modify argv
+            std::string portStr = std::to_string(port);
+            
+            // Create array of mutable string copies
+            char* argv0 = strdup("slipstream");
+            char* argv1 = strdup(domain);
+            char* argv2 = strdup(resolvers);
+            char* argv3 = strdup("--socks-port");
+            char* argv4 = strdup(portStr.c_str());
+            
+            char* args[] = { argv0, argv1, argv2, argv3, argv4, nullptr };
+            
+            LOGI("Found main, calling with argc=5");
+            result = main_func(5, args);
+            if (result != 0) {
+                LOGE("main failed with code: %d", result);
+            } else {
+                LOGI("main completed successfully");
+            }
+            
+            // Free the allocated strings
+            free(argv0);
+            free(argv1);
+            free(argv2);
+            free(argv3);
+            free(argv4);
+        } else {
+            LOGE("Neither slipstream_main nor main found in library: %s", dlerror());
+            result = -2;
         }
     }
 
-    dlclose(handle);
+    // Don't dlclose - slipstream runs as a server and spawns threads
+    // The library needs to remain loaded for the lifetime of the app
+    // dlclose(handle);
+
+    env->ReleaseStringUTFChars(jLibPath, libPath);
     env->ReleaseStringUTFChars(jDomain, domain);
     env->ReleaseStringUTFChars(jResolvers, resolvers);
-    LOGI("Slipstream finished rc=%d", rc);
-    return rc;
+
+    return result;
 }
