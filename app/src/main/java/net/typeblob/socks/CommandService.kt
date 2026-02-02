@@ -115,12 +115,12 @@ class CommandService : Service() {
             log("[Service] Step 4: Binary size: ${sourceFile.length()} bytes")
             log("[Service] Step 5: Binary executable: ${sourceFile.canExecute()}")
             
-            // Destination: App's private files directory (executable location)
-            val destFile = File(filesDir, "slipstream-client")
+            // Destination: Use codeCacheDir for executable permissions
+            val destFile = File(codeCacheDir, "slipstream-client")
             
-            // Copy binary to writable location
+            // Copy binary to executable location
             if (!destFile.exists() || sourceFile.length() != destFile.length()) {
-                log("[Service] Step 6: Copying binary to ${filesDir.absolutePath}/slipstream-client")
+                log("[Service] Step 6: Copying binary to ${codeCacheDir.absolutePath}/slipstream-client")
                 sourceFile.inputStream().use { input ->
                     destFile.outputStream().use { output ->
                         input.copyTo(output)
@@ -128,12 +128,20 @@ class CommandService : Service() {
                 }
                 log("[Service] Step 7: Copy completed (${destFile.length()} bytes)")
             } else {
-                log("[Service] Step 6: Binary already exists in private directory")
+                log("[Service] Step 6: Binary already exists in cache directory")
             }
             
-            // Make executable
+            // Make executable with multiple methods for reliability
             destFile.setExecutable(true, false)
             destFile.setReadable(true, false)
+            
+            // Try chmod as backup (may fail on some devices, that's OK)
+            try {
+                Runtime.getRuntime().exec(arrayOf("chmod", "755", destFile.absolutePath)).waitFor()
+            } catch (e: Exception) {
+                log("[Service] Step 7a: chmod not available (this is normal on some devices)")
+            }
+            
             log("[Service] Step 7: Made binary executable")
             
             val command = listOf(
@@ -145,10 +153,10 @@ class CommandService : Service() {
             )
             
             log("[Service] Step 8: Command: ${command.joinToString(" ")}")
-            log("[Service] Step 9: Working dir: ${filesDir.absolutePath}")
+            log("[Service] Step 9: Working dir: ${codeCacheDir.absolutePath}")
             
             val processBuilder = ProcessBuilder(command)
-                .directory(filesDir)
+                .directory(codeCacheDir)
                 .redirectErrorStream(true)
             
             // Set library path
@@ -166,31 +174,27 @@ class CommandService : Service() {
             
         } catch (e: Exception) {
             log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
-            updateStatus(SlipstreamStatus.Failed("Slipstream failed"), SocksStatus.Stopped)
             throw e
         }
     }
     
     private fun startOutputMonitoring() {
+        monitorJob?.cancel()
         monitorJob = scope.launch {
             try {
                 val reader = BufferedReader(InputStreamReader(slipstreamProcess?.inputStream))
                 var line: String?
                 
-                while (reader.readLine().also { line = it } != null) {
-                    line?.let { log("[Slipstream] $it") }
+                while (isActive && reader.readLine().also { line = it } != null) {
+                    log("[Slipstream] $line")
                 }
                 
-                val exitCode = slipstreamProcess?.waitFor() ?: -1
-                log("[Service] Process exited with code: $exitCode")
-                
-                if (exitCode != 0) {
-                    updateStatus(SlipstreamStatus.Failed("Exit code: $exitCode"), SocksStatus.Stopped)
-                }
+                log("[Service] Process output stream ended")
                 
             } catch (e: Exception) {
-                log("[Service] Monitor error: ${e.message}")
+                if (isActive) {
+                    log("[Service] Output monitoring error: ${e.message}")
+                }
             }
         }
     }
@@ -200,33 +204,47 @@ class CommandService : Service() {
             val process = Runtime.getRuntime().exec("killall slipstream-client")
             process.waitFor()
         } catch (e: Exception) {
-            log("[Service] Cleanup error: ${e.message}")
+            log("[Service] Cleanup warning: ${e.message}")
             1
         }
     }
     
-    private fun updateStatus(slipstream: SlipstreamStatus, socks: SocksStatus) {
-        statusCallback?.invoke(slipstream, socks)
-    }
-    
-    private fun updateNotification(title: String, content: String) {
-        val notification = createNotification(title, content)
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, notification)
-    }
-    
-    private fun createNotification(title: String, content: String): Notification {
-        val channelId = "slipstream_service"
+    fun stopTunnel() {
+        log("[Service] Stopping tunnel...")
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Slipstream Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+        try {
+            slipstreamProcess?.destroy()
+            slipstreamProcess = null
+            
+            monitorJob?.cancel()
+            monitorJob = null
+            
+            killSlipstreamProcesses()
+            
+            updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
+            
+        } catch (e: Exception) {
+            log("[Service] Stop error: ${e.message}")
         }
+        
+        stopSelf()
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        log("[Service] Service destroyed")
+        
+        slipstreamProcess?.destroy()
+        monitorJob?.cancel()
+        scope.cancel()
+    }
+    
+    private fun updateStatus(slipstreamStatus: SlipstreamStatus, socksStatus: SocksStatus) {
+        statusCallback?.invoke(slipstreamStatus, socksStatus)
+    }
+    
+    private fun createNotification(title: String, text: String): Notification {
+        createNotificationChannel()
         
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -234,31 +252,39 @@ class CommandService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
-        return NotificationCompat.Builder(this, channelId)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
-            .setContentText(content)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
+            .setOngoing(true)
             .build()
     }
     
-    override fun onDestroy() {
-        super.onDestroy()
-        log("[Service] Stopping tunnel...")
-        updateStatus(SlipstreamStatus.Stopping, SocksStatus.Stopping)
-        
-        monitorJob?.cancel()
-        slipstreamProcess?.destroy()
-        killSlipstreamProcesses()
-        
-        updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
-        log("[Service] Tunnel stopped")
-        
-        scope.cancel()
+    private fun updateNotification(title: String, text: String) {
+        val notification = createNotification(title, text)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+    
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Slipstream Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Slipstream tunnel service notifications"
+            }
+            
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
     }
     
     companion object {
         private const val TAG = "CommandService"
+        private const val CHANNEL_ID = "slipstream_service"
         private const val NOTIFICATION_ID = 1
     }
 }
