@@ -19,16 +19,6 @@ android {
         }
     }
 
-    // Enable ABI splits for per-architecture APKs
-    splits {
-        abi {
-            enable = true
-            reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-            universalApk = false
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -43,7 +33,6 @@ android {
         compose = true
     }
     composeOptions {
-        // Compatible with Kotlin 1.9.22
         kotlinCompilerExtensionVersion = "1.5.10"
     }
 
@@ -69,27 +58,22 @@ android {
 }
 
 dependencies {
-    // Compose BOM -- lets you omit versions for Compose dependencies
+    // (dependencies unchanged)
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
-
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
-
-    // Compose dependencies -- versioned by BOM
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.foundation:foundation") // includes foundation-layout
+    implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material:material")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.runtime:runtime-livedata")
-
-    // Tooling
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
