@@ -71,10 +71,9 @@ class CommandService : Service() {
             try {
                 // Clean up any existing processes
                 log("[Service] Cleaning up old processes...")
-                val cleanup = killSlipstreamProcesses()
-                log("[Service] Cleanup exit: $cleanup")
+                killSlipstreamProcesses()
                 
-                updateStatus(SlipstreamStatus.Starting("Cleaning up..."), SocksStatus.Waiting)
+                updateStatus(SlipstreamStatus.Starting("Starting tunnel..."), SocksStatus.Waiting)
                 delay(500)
                 
                 // Start slipstream
@@ -103,77 +102,44 @@ class CommandService : Service() {
         try {
             log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
             
-            // Source: Native library location
-            val sourceFile = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
-            log("[Service] Step 2: Looking for binary: ${sourceFile.absolutePath}")
+            val binaryFile = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
+            log("[Service] Step 2: Binary path: ${binaryFile.absolutePath}")
             
-            if (!sourceFile.exists()) {
-                throw IOException("Binary not found at: ${sourceFile.absolutePath}")
+            if (!binaryFile.exists()) {
+                throw IOException("Binary not found at: ${binaryFile.absolutePath}")
             }
             
             log("[Service] Step 3: Binary exists: true")
-            log("[Service] Step 4: Binary size: ${sourceFile.length()} bytes")
-            log("[Service] Step 5: Binary executable: ${sourceFile.canExecute()}")
+            log("[Service] Step 4: Binary size: ${binaryFile.length()} bytes")
             
-            // Destination: Use codeCacheDir for executable permissions
-            val destFile = File(codeCacheDir, "slipstream-client")
-            
-            // Copy binary to executable location
-            if (!destFile.exists() || sourceFile.length() != destFile.length()) {
-                log("[Service] Step 6: Copying binary to ${codeCacheDir.absolutePath}/slipstream-client")
-                sourceFile.inputStream().use { input ->
-                    destFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                log("[Service] Step 7: Copy completed (${destFile.length()} bytes)")
-            } else {
-                log("[Service] Step 6: Binary already exists in cache directory")
-            }
-            
-            // Make executable with multiple methods for reliability
-            destFile.setExecutable(true, false)
-            destFile.setReadable(true, false)
-            
-            // Try chmod as backup (may fail on some devices, that's OK)
-            try {
-                Runtime.getRuntime().exec(arrayOf("chmod", "755", destFile.absolutePath)).waitFor()
-            } catch (e: Exception) {
-                log("[Service] Step 7a: chmod not available (this is normal on some devices)")
-            }
-            
-            log("[Service] Step 7: Made binary executable")
+            // Use shell to execute (bypasses some SELinux restrictions)
+            val shellCommand = "cd ${filesDir.absolutePath} && LD_LIBRARY_PATH=${applicationInfo.nativeLibraryDir} ${binaryFile.absolutePath} $domain $resolvers --socks-port $port"
             
             val command = listOf(
-                destFile.absolutePath,
-                domain,
-                resolvers,
-                "--socks-port",
-                port.toString()
+                "/system/bin/sh",
+                "-c",
+                shellCommand
             )
             
-            log("[Service] Step 8: Command: ${command.joinToString(" ")}")
-            log("[Service] Step 9: Working dir: ${codeCacheDir.absolutePath}")
+            log("[Service] Step 5: Using shell wrapper")
+            log("[Service] Step 6: Working dir: ${filesDir.absolutePath}")
             
             val processBuilder = ProcessBuilder(command)
-                .directory(codeCacheDir)
+                .directory(filesDir)
                 .redirectErrorStream(true)
             
-            // Set library path
-            val env = processBuilder.environment()
-            env["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
-            
-            log("[Service] Step 10: Starting process...")
+            log("[Service] Step 7: Starting process via shell...")
             
             slipstreamProcess = processBuilder.start()
             
-            log("[Service] Step 11: Process started with hash: ${slipstreamProcess?.hashCode()}")
+            log("[Service] Step 8: Process started successfully")
             
             // Start monitoring
             startOutputMonitoring()
             
         } catch (e: Exception) {
             log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
             throw e
         }
     }
@@ -199,13 +165,11 @@ class CommandService : Service() {
         }
     }
     
-    private fun killSlipstreamProcesses(): Int {
-        return try {
-            val process = Runtime.getRuntime().exec("killall slipstream-client")
-            process.waitFor()
+    private fun killSlipstreamProcesses() {
+        try {
+            Runtime.getRuntime().exec("killall libslipstream.so").waitFor()
         } catch (e: Exception) {
-            log("[Service] Cleanup warning: ${e.message}")
-            1
+            log("[Service] Cleanup: ${e.message}")
         }
     }
     
