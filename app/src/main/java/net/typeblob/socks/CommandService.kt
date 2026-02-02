@@ -112,119 +112,42 @@ class CommandService : Service() {
             log("[Service] Step 3: Binary exists: true")
             log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
             
-            // Copy to files directory
-            val executablePath = File(filesDir, "slipstream")
+            // SOLUTION: Execute directly from native library directory using LD_PRELOAD trick
+            // The native lib directory has the correct SELinux context
             
-            log("[Service] Step 5: Copying binary to ${executablePath.absolutePath}")
+            log("[Service] Step 5: Using direct execution from native lib dir")
             
-            if (executablePath.exists()) {
-                executablePath.delete()
-            }
+            // Create a shell script wrapper that will execute the binary
+            val wrapperScript = File(filesDir, "run_slipstream.sh")
+            val scriptContent = """
+                #!/system/bin/sh
+                export LD_LIBRARY_PATH="${applicationInfo.nativeLibraryDir}"
+                cd "${filesDir.absolutePath}"
+                exec "${sourceBinary.absolutePath}" "$domain" "$resolvers" --socks-port $port
+            """.trimIndent()
             
-            sourceBinary.inputStream().use { input ->
-                executablePath.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
+            wrapperScript.writeText(scriptContent)
+            wrapperScript.setExecutable(true, false)
             
-            log("[Service] Step 6: Copy completed (${executablePath.length()} bytes)")
+            log("[Service] Step 6: Created wrapper script at ${wrapperScript.absolutePath}")
             
-            // Set permissions
-            executablePath.setExecutable(true, false)
-            executablePath.setReadable(true, false)
-            executablePath.setWritable(true, true)
-            
-            log("[Service] Step 7: Set Java permissions")
-            
-            // Try chmod 777
-            try {
-                val chmodProcess = Runtime.getRuntime().exec(arrayOf("chmod", "777", executablePath.absolutePath))
-                val chmodExit = chmodProcess.waitFor()
-                log("[Service] Step 8: chmod 777 exit code: $chmodExit")
-            } catch (e: Exception) {
-                log("[Service] Step 8: chmod failed - ${e.message}")
-            }
-            
-            // === DIAGNOSTIC SECTION ===
-            log("[Service] ========== DIAGNOSTIC START ==========")
-            
-            // Check file with ls -l
-            try {
-                val lsProcess = Runtime.getRuntime().exec(arrayOf("ls", "-l", executablePath.absolutePath))
-                lsProcess.waitFor()
-                val lsOutput = lsProcess.inputStream.bufferedReader().readText().trim()
-                val lsError = lsProcess.errorStream.bufferedReader().readText().trim()
-                log("[Service] DIAG: ls -l result:")
-                log("[Service] DIAG:   $lsOutput")
-                if (lsError.isNotEmpty()) log("[Service] DIAG:   Error: $lsError")
-            } catch (e: Exception) {
-                log("[Service] DIAG: ls -l failed - ${e.message}")
-            }
-            
-            // Check SELinux context
-            try {
-                val lsZProcess = Runtime.getRuntime().exec(arrayOf("ls", "-Z", executablePath.absolutePath))
-                lsZProcess.waitFor()
-                val lsZOutput = lsZProcess.inputStream.bufferedReader().readText().trim()
-                val lsZError = lsZProcess.errorStream.bufferedReader().readText().trim()
-                log("[Service] DIAG: ls -Z result:")
-                log("[Service] DIAG:   $lsZOutput")
-                if (lsZError.isNotEmpty()) log("[Service] DIAG:   Error: $lsZError")
-            } catch (e: Exception) {
-                log("[Service] DIAG: ls -Z failed - ${e.message}")
-            }
-            
-            // Try direct execution
-            try {
-                log("[Service] DIAG: Testing direct execution with --help")
-                val testProcess = Runtime.getRuntime().exec(arrayOf(executablePath.absolutePath, "--help"))
-                val testExit = testProcess.waitFor()
-                val testStdout = testProcess.inputStream.bufferedReader().readText().trim()
-                val testStderr = testProcess.errorStream.bufferedReader().readText().trim()
-                
-                log("[Service] DIAG: Direct exec exit code: $testExit")
-                if (testStdout.isNotEmpty()) {
-                    log("[Service] DIAG: Direct exec stdout:")
-                    testStdout.lines().forEach { log("[Service] DIAG:   $it") }
-                }
-                if (testStderr.isNotEmpty()) {
-                    log("[Service] DIAG: Direct exec stderr:")
-                    testStderr.lines().forEach { log("[Service] DIAG:   $it") }
-                }
-            } catch (e: Exception) {
-                log("[Service] DIAG: Direct exec failed - ${e.javaClass.simpleName}: ${e.message}")
-            }
-            
-            // Check file properties
-            log("[Service] DIAG: File properties:")
-            log("[Service] DIAG:   exists: ${executablePath.exists()}")
-            log("[Service] DIAG:   canRead: ${executablePath.canRead()}")
-            log("[Service] DIAG:   canWrite: ${executablePath.canWrite()}")
-            log("[Service] DIAG:   canExecute: ${executablePath.canExecute()}")
-            log("[Service] DIAG:   length: ${executablePath.length()}")
-            log("[Service] DIAG:   isFile: ${executablePath.isFile}")
-            
-            log("[Service] ========== DIAGNOSTIC END ==========")
-            
-            // Now try actual execution with shell
-            val shellCommand = "cd '${filesDir.absolutePath}' && LD_LIBRARY_PATH='${applicationInfo.nativeLibraryDir}' '${executablePath.absolutePath}' '$domain' '$resolvers' --socks-port $port"
-            
+            // Execute using sh with the script
             val command = listOf(
                 "/system/bin/sh",
-                "-c",
-                shellCommand
+                wrapperScript.absolutePath
             )
             
-            log("[Service] Step 9: Starting process via shell...")
-            log("[Service] Step 10: Shell command: $shellCommand")
+            log("[Service] Step 7: Command: ${command.joinToString(" ")}")
             
             val processBuilder = ProcessBuilder(command)
                 .directory(filesDir)
                 .redirectErrorStream(true)
             
+            log("[Service] Step 8: Starting process...")
+            
             slipstreamProcess = processBuilder.start()
             
-            log("[Service] Step 11: Process started (handle: ${slipstreamProcess?.hashCode()})")
+            log("[Service] Step 9: Process started successfully")
             
             // Start monitoring
             startOutputMonitoring()
