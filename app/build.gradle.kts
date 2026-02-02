@@ -59,6 +59,9 @@ android {
 }
 
 dependencies {
+    // Compose BOM -- lets you omit versions for Compose dependencies
+    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
@@ -66,23 +69,17 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
 
-    // Jetpack Compose - Core and Foundation
-    implementation("androidx.activity:activity-compose:1.8.2")
-    implementation("androidx.compose.ui:ui:1.5.4")
-    implementation("androidx.compose.runtime:runtime:1.5.4")
-    implementation("androidx.compose.foundation:foundation:1.5.4")
-    implementation("androidx.compose.foundation:foundation-layout:1.5.4")
-    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    // Compose dependencies -- versioned by BOM
     implementation("androidx.activity:activity-compose")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.foundation:foundation") // includes foundation-layout
+    implementation("androidx.compose.material:material")
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3")
-    
-    // Compose Material and Material3
-    implementation("androidx.compose.material:material:1.5.4")
-    implementation("androidx.compose.material:material-icons-core:1.5.4")
-    implementation("androidx.compose.material:material-icons-extended:1.5.4")
-    implementation("androidx.compose.material3:material3:1.2.0")
+    implementation("androidx.compose.runtime:runtime-livedata")
 
-    // Compose tooling
-    implementation("androidx.compose.ui:ui-tooling-preview:1.5.4")
-    debugImplementation("androidx.compose.ui:ui-tooling:1.5.4")
+    // Tooling
+    debugImplementation("androidx.compose.ui:ui-tooling")
 }
