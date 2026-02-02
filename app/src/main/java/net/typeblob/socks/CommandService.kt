@@ -183,9 +183,9 @@ class CommandService : Service() {
         monitorJob = scope.launch {
             try {
                 val reader = BufferedReader(InputStreamReader(slipstreamProcess?.inputStream))
-                var line: String?
                 
-                while (isActive && reader.readLine().also { line = it } != null) {
+                while (isActive) {
+                    val line = reader.readLine() ?: break
                     log("[Slipstream] $line")
                 }
                 
