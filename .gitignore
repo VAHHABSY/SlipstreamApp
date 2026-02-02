@@ -27,3 +27,7 @@ out/
 
 # Gradle
 .gradle/
+
+# NDK build artifacts
+app/src/main/libs/
+app/src/main/obj/
