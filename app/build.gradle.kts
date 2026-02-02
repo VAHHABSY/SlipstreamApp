@@ -19,6 +19,16 @@ android {
         }
     }
 
+    // Enable ABI splits for per-architecture APKs
+    splits {
+        abi {
+            enable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            universalApk = false
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

@@ -1,4 +1,4 @@
-name: Android CI Build
+name: Android CI Build (Per-Architecture APKs)
 
 on:
   push:
@@ -55,33 +55,61 @@ jobs:
         done
         echo "Final jniLibs contents (arm64-v8a):"
         ls -la app/src/main/jniLibs/arm64-v8a/
-        
-    - name: Build Debug APK
+
+    # Ensure ABI splits are configured in app/build.gradle
+    - name: Add per-ABI APKs build configuration (if not already present)
+      run: |
+        if ! grep -q "splits.abi.enable = true" app/build.gradle; then
+          sed -i '/android {/a \
+          \    splits {\
+          \        abi {\
+          \            enable = true\
+          \            universalApk = false\
+          \            reset()\
+          \            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"\
+          \        }\
+          \    }' app/build.gradle
+          cat app/build.gradle
+        fi
+
+    - name: Build per-ABI Debug APKs
       run: ./gradlew assembleDebug --stacktrace --no-daemon
-        
-    - name: Build Release APK
+
+    - name: Build per-ABI Release APKs
       run: ./gradlew assembleRelease --stacktrace --no-daemon
-        
-    - name: Upload Debug APK
+
+    - name: Find generated per-ABI APKs
+      id: find_apks
+      run: |
+        echo "DEBUG_DIR=app/build/outputs/apk/debug" >> $GITHUB_ENV
+        echo "RELEASE_DIR=app/build/outputs/apk/release" >> $GITHUB_ENV
+        echo 'DEBUG_APKS<<EOF' >> $GITHUB_ENV
+        find app/build/outputs/apk/debug -name "*-debug.apk"
+        echo 'EOF' >> $GITHUB_ENV
+        echo 'RELEASE_APKS<<EOF' >> $GITHUB_ENV
+        find app/build/outputs/apk/release -name "*-release-unsigned.apk"
+        echo 'EOF' >> $GITHUB_ENV
+
+    - name: Upload per-ABI Debug APKs
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
-        
-    - name: Upload Release APK
+        name: app-debug-abis
+        path: app/build/outputs/apk/debug/*-debug.apk
+
+    - name: Upload per-ABI Release APKs
       uses: actions/upload-artifact@v4
       with:
-        name: app-release
-        path: app/build/outputs/apk/release/app-release-unsigned.apk
-        
-    - name: Create Release
+        name: app-release-abis
+        path: app/build/outputs/apk/release/*-release-unsigned.apk
+
+    - name: Create Release (per-ABI APKs)
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: softprops/action-gh-release@v1
       with:
         tag_name: v1.0-${{ github.run_number }}
         name: SlipstreamApp Build ${{ github.run_number }}
         files: |
-          app/build/outputs/apk/debug/app-debug.apk
-          app/build/outputs/apk/release/app-release-unsigned.apk
+          app/build/outputs/apk/debug/*-debug.apk
+          app/build/outputs/apk/release/*-release-unsigned.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
