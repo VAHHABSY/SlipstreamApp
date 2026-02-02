@@ -102,18 +102,56 @@ class CommandService : Service() {
         try {
             log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
             
-            val binaryFile = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
-            log("[Service] Step 2: Binary path: ${binaryFile.absolutePath}")
+            val sourceBinary = File(applicationInfo.nativeLibraryDir, "libslipstream.so")
+            log("[Service] Step 2: Source binary: ${sourceBinary.absolutePath}")
             
-            if (!binaryFile.exists()) {
-                throw IOException("Binary not found at: ${binaryFile.absolutePath}")
+            if (!sourceBinary.exists()) {
+                throw IOException("Binary not found at: ${sourceBinary.absolutePath}")
             }
             
             log("[Service] Step 3: Binary exists: true")
-            log("[Service] Step 4: Binary size: ${binaryFile.length()} bytes")
+            log("[Service] Step 4: Binary size: ${sourceBinary.length()} bytes")
             
-            // Use shell to execute (bypasses some SELinux restrictions)
-            val shellCommand = "cd ${filesDir.absolutePath} && LD_LIBRARY_PATH=${applicationInfo.nativeLibraryDir} ${binaryFile.absolutePath} $domain $resolvers --socks-port $port"
+            // Create symlink or copy to files directory with simple name
+            val executablePath = File(filesDir, "slipstream")
+            
+            // Remove old file if exists
+            if (executablePath.exists()) {
+                executablePath.delete()
+            }
+            
+            log("[Service] Step 5: Creating symlink...")
+            
+            // Try to create symlink first
+            var symlinkSuccess = false
+            try {
+                val createSymlink = Runtime.getRuntime().exec(arrayOf(
+                    "ln", "-s", sourceBinary.absolutePath, executablePath.absolutePath
+                ))
+                val exitCode = createSymlink.waitFor()
+                symlinkSuccess = (exitCode == 0 && executablePath.exists())
+                log("[Service] Step 5a: Symlink result: $symlinkSuccess")
+            } catch (e: Exception) {
+                log("[Service] Step 5a: Symlink failed: ${e.message}")
+            }
+            
+            // Fallback: copy the binary if symlink failed
+            if (!symlinkSuccess) {
+                log("[Service] Step 5b: Copying binary instead...")
+                sourceBinary.inputStream().use { input ->
+                    executablePath.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                executablePath.setExecutable(true, false)
+                executablePath.setReadable(true, false)
+                log("[Service] Step 5c: Copy completed: ${executablePath.length()} bytes")
+            }
+            
+            log("[Service] Step 6: Executable ready at: ${executablePath.absolutePath}")
+            
+            // Build command with relative path
+            val shellCommand = "cd '${filesDir.absolutePath}' && LD_LIBRARY_PATH='${applicationInfo.nativeLibraryDir}' ./slipstream '$domain' '$resolvers' --socks-port $port"
             
             val command = listOf(
                 "/system/bin/sh",
@@ -121,18 +159,17 @@ class CommandService : Service() {
                 shellCommand
             )
             
-            log("[Service] Step 5: Using shell wrapper")
-            log("[Service] Step 6: Working dir: ${filesDir.absolutePath}")
+            log("[Service] Step 7: Shell command ready")
             
             val processBuilder = ProcessBuilder(command)
                 .directory(filesDir)
                 .redirectErrorStream(true)
             
-            log("[Service] Step 7: Starting process via shell...")
+            log("[Service] Step 8: Starting process via shell...")
             
             slipstreamProcess = processBuilder.start()
             
-            log("[Service] Step 8: Process started successfully")
+            log("[Service] Step 9: Process started successfully")
             
             // Start monitoring
             startOutputMonitoring()
@@ -167,9 +204,14 @@ class CommandService : Service() {
     
     private fun killSlipstreamProcesses() {
         try {
-            Runtime.getRuntime().exec("killall libslipstream.so").waitFor()
+            Runtime.getRuntime().exec("killall slipstream").waitFor()
         } catch (e: Exception) {
             log("[Service] Cleanup: ${e.message}")
+        }
+        try {
+            Runtime.getRuntime().exec("killall libslipstream.so").waitFor()
+        } catch (e: Exception) {
+            // Ignore
         }
     }
     
