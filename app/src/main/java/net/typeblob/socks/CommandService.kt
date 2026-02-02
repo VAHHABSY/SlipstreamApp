@@ -10,6 +10,8 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.system.Os
+import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -74,7 +76,7 @@ class CommandService : Service() {
             0,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or
-                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
         )
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
@@ -169,9 +171,11 @@ class CommandService : Service() {
                 }
             }
 
-            // Make it executable (prefer Os.chmod, fallback to system chmod)
+            // Make it executable (prefer Os.chmod, fallback to system chmod).
+            // Use OsConstants flags to avoid unsupported octal literals in Kotlin.
             try {
-                android.system.Os.chmod(destBinary.absolutePath, 0o700)
+                val mode700 = OsConstants.S_IRUSR or OsConstants.S_IWUSR or OsConstants.S_IXUSR // 0700
+                Os.chmod(destBinary.absolutePath, mode700)
             } catch (_: Throwable) {
                 Runtime.getRuntime()
                     .exec(arrayOf("/system/bin/chmod", "700", destBinary.absolutePath))
@@ -251,7 +255,7 @@ class CommandService : Service() {
         for (cmd in commands) {
             try {
                 Runtime.getRuntime().exec(cmd).waitFor()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Ignore
             }
         }
