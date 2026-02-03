@@ -114,9 +114,9 @@ class CommandService : Service() {
 
         scope.launch {
             try {
-                // Clean up any existing processes
-                log("[Service] Cleaning up old processes...")
-                killSlipstreamProcesses()
+                // Commented out to avoid killing new process
+                // log("[Service] Cleaning up old processes...")
+                // killSlipstreamProcesses()
 
                 updateStatus(SlipstreamStatus.Starting("Starting tunnel..."), SocksStatus.Waiting)
 
