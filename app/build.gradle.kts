@@ -13,7 +13,6 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-        // Removed ndk block to use prebuilt binaries only
     }
 
     buildTypes {
@@ -23,7 +22,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // To make a signed APK, add signingConfig here if you want
         }
     }
 
@@ -34,7 +32,12 @@ android {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
 
-    // Removed externalNativeBuild to skip native compilation
+    externalNativeBuild {
+        cmake {
+            // Note: Use .set for Kotlin DSL, and the path must be a String
+            path = "src/main/cpp/CMakeLists.txt"
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -59,20 +62,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
-    implementation("androidx.activity:activity-compose")
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.material:material")
-    implementation("androidx.compose.material:material-icons-core")
-    implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.runtime:runtime-livedata")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-}
-
-externalNativeBuild {
-    cmake {
-        path = file("src/main/cpp/CMakeLists.txt")
-    }
-}
+    implementation
+
