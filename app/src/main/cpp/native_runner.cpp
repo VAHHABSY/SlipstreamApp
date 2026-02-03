@@ -8,7 +8,7 @@
 #include <ctime>
 
 #define LOG_TAG "NativeRunner"
-#define LOG_FILE "/data/data/net.typeblob.socks/files/native_log.txt"
+#define LOG_FILE "/sdcard/Android/data/net.typeblob.socks/files/native_log.txt"
 
 #define LOGI(...) do { \
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__); \
