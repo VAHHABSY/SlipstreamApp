@@ -24,10 +24,7 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Install Android NDK
-      run: |
-        echo "y" | sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
-        echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.0.12077973" >> $GITHUB_ENV
+    # Removed NDK install since we're using prebuilts
 
     - name: Make gradlew executable
       run: chmod +x gradlew
@@ -40,21 +37,9 @@ jobs:
         ls -la app/src/main/jniLibs/x86/ || true
         ls -la app/src/main/jniLibs/x86_64/ || true
 
-    - name: Build native libraries with NDK
-      run: |
-        cd app/src/main/jni
-        ${ANDROID_NDK_HOME}/ndk-build APP_ABI=arm64-v8a,armeabi-v7a,x86,x86_64
-        cd ../../../..
+    # Removed NDK build step since using prebuilts
 
-    - name: Copy prebuilt libraries to jniLibs (excluding libnative_runner.so)
-      run: |
-        echo "Copying only prebuilt .so libraries to jniLibs (excluding libnative_runner.so)..."
-        for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
-          mkdir -p app/src/main/jniLibs/$ABI
-          find app/src/main/libs/$ABI/ -maxdepth 1 -type f -name '*.so' ! -name 'libnative_runner.so' -exec cp -n {} app/src/main/jniLibs/$ABI/ \; || true
-        done
-        echo "Final jniLibs contents (arm64-v8a):"
-        ls -la app/src/main/jniLibs/arm64-v8a/
+    # Removed copy step since prebuilts are already in place
 
     - name: Build Debug APK
       run: ./gradlew assembleDebug --stacktrace --no-daemon
@@ -75,13 +60,5 @@ jobs:
         path: app/build/outputs/apk/release/app-release-unsigned.apk
 
     - name: Create Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v1.0-${{ github.run_number }}
-        name: SlipstreamApp Build ${{ github.run_number }}
-        files: |
-          app/build/outputs/apk/debug/app-debug.apk
-          app/build/outputs/apk/release/app-release-unsigned.apk
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if](#)
+
