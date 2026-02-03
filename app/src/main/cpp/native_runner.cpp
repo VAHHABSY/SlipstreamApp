@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdio>
 #include <ctime>
+#include <cstdarg>  // Added for va_list
 
 #define LOG_TAG "NativeRunner"
 #define LOG_FILE "/sdcard/Android/data/net.typeblob.socks/files/native_log.txt"
