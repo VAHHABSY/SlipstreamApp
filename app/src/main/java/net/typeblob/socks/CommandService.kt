@@ -21,7 +21,7 @@ class CommandService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var slipstreamJob: Job? = null
-    private var slipstreamProcess: Process? = null  // Added for process management
+    private var slipstreamProcess: Process? = null
     private var isSlipstreamRunning = false
 
     private var statusCallback: ((SlipstreamStatus, SocksStatus) -> Unit)? = null
@@ -124,7 +124,7 @@ class CommandService : Service() {
                 // Start slipstream
                 startSlipstreamProcess(domain, resolvers, port)
 
-                // Set status to running immediately after process starts
+                // Set status to running immediately after process starts and health check
                 updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
                 updateNotification("Running", "SOCKS5 proxy on port $port")
                 log("[Service] Tunnel started successfully")
@@ -173,6 +173,14 @@ class CommandService : Service() {
             // Start the process
             slipstreamProcess = ProcessBuilder(*command).start()
             
+            // Check if process is still alive after a short delay
+            delay(2000)  // Wait 2 seconds for startup
+            if (!slipstreamProcess.isAlive()) {
+                val exitCode = slipstreamProcess.exitValue()
+                log("[Service] Slipstream process died immediately with exit code: $exitCode")
+                throw IOException("Slipstream process failed to start (exit code: $exitCode)")
+            }
+            
             // Monitor the process in background
             slipstreamJob = scope.launch {
                 try {
@@ -193,7 +201,7 @@ class CommandService : Service() {
                 }
             }
 
-            log("[Service] Step 6: Slipstream process started")
+            log("[Service] Step 6: Slipstream process started and healthy")
 
         } catch (e: Exception) {
             log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
