@@ -60,5 +60,13 @@ jobs:
         path: app/build/outputs/apk/release/app-release-unsigned.apk
 
     - name: Create Release
-      if](#)
-
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0-${{ github.run_number }}
+        name: SlipstreamApp Build ${{ github.run_number }}
+        files: |
+          app/build/outputs/apk/debug/app-debug.apk
+          app/build/outputs/apk/release/app-release-unsigned.apk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
