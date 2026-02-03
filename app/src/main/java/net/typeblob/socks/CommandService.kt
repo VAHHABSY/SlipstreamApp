@@ -148,14 +148,14 @@ class CommandService : Service() {
             if (!libPath.exists()) {
                 throw IOException("Library not found at: ${libPath.absolutePath}")
             }
-            val logFilePath = File(getFilesDir(), "native_log.txt").absolutePath
+
             log("[Service] Step 3: Library exists: true")
             log("[Service] Step 4: Library size: ${libPath.length()} bytes")
 
-            // Get log file path
-            val logFilePath = File(applicationInfo.dataDir, "files/native_log.txt").absolutePath
+            // Get log file path (creates /files directory if needed)
+            val logFilePath = File(getFilesDir(), "native_log.txt").absolutePath
             log("[Service] Log file path: $logFilePath")
-            
+
             // Load and run slipstream via JNI
             log("[Service] Step 5: Loading library via JNI...")
             
