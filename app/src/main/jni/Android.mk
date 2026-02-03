@@ -69,7 +69,7 @@ include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := tun2socks  # <-- Added this line
+LOCAL_MODULE := tun2socks
 
 LOCAL_CFLAGS := -std=gnu99
 LOCAL_CFLAGS += -DBADVPN_THREADWORK_USE_PTHREAD -DBADVPN_LINUX -DBADVPN_BREACTOR_BADVPN -D_GNU_SOURCE
@@ -145,6 +145,9 @@ TUN2SOCKS_SOURCES := \
         flowextra/BSocks.c \
         flowextra/SocksClient.c \
         flowextra/HttpProxy.c \
+        flowextra/SocksUdpGwClient.c \
+        flowextra/SocksUdpGwClient.c \
+        flowextra/SocksUdpGwClient.c \
         tun2socks/tun2socks.c \
         base/BLog.c \
         base/DebugObject.c \
@@ -191,7 +194,55 @@ TUN2SOCKS_SOURCES := \
         lwip/src/core/ipv6/nd6.c \
         lwip/src/core/ipv6/ethip6.c \
         lwip/custom/sys.c \
-        tun2socks/SocksUdpGwClient.c
+        tun2socks/SocksUdpGwClient.c \
+        tun2socks/tun2socks.c \
+        base/BLog.c \
+        base/DebugObject.c \
+        base/BPendingGroup.c \
+        base/BInteger.c \
+        udevmonitor/NCDUdevManager.c \
+        random/BRandom2.c \
+        ncd/NCDVal.c \
+        ncd/NCDStringIndex.c \
+        ncd/NCDModuleIndex.c \
+        lwip/src/core/init.c \
+        lwip/src/core/def.c \
+        lwip/src/core/dns.c \
+        lwip/src/core/inet_chksum.c \
+        lwip/src/core/ip.c \
+        lwip/src/core/mem.c \
+        lwip/src/core/memp.c \
+        lwip/src/core/netif.c \
+        lwip/src/core/pbuf.c \
+        lwip/src/core/raw.c \
+        lwip/src/core/stats.c \
+        lwip/src/core/sys.c \
+        lwip/src/core/tcp.c \
+        lwip/src/core/tcp_in.c \
+        lwip/src/core/tcp_out.c \
+        lwip/src/core/timers.c \
+        lwip/src/core/udp.c \
+        lwip/src/core/ipv4/autoip.c \
+        lwip/src/core/ipv4/icmp.c \
+        lwip/src/core/ipv4/igmp.c \
+        lwip/src/core/ipv4/inet.c \
+        lwip/src/core/ipv4/inet_chksum.c \
+        lwip/src/core/ipv4/ip.c \
+        lwip/src/core/ipv4/ip_addr.c \
+        lwip/src/core/ipv4/ip_frag.c \
+        lwip/src/core/ipv4/dhcp.c \
+        lwip/src/core/ipv4/etharp.c \
+        lwip/src/core/ipv6/icmp6.c \
+        lwip/src/core/ipv6/inet6.c \
+        lwip/src/core/ipv6/ip6.c \
+        lwip/src/core/ipv6/ip6_addr.c \
+        lwip/src/core/ipv6/ip6_frag.c \
+        lwip/src/core/ipv6/mld6.c \
+        lwip/src/core/ipv6/nd6.c \
+        lwip/src/core/ipv6/ethip6.c \
+        lwip/custom/sys.c \
+        tun2socks/SocksUdpGwClient.c \
+        tun2socks/tun2socks.c
 
 LOCAL_SRC_FILES := $(addprefix badvpn/, $(TUN2SOCKS_SOURCES))
 
