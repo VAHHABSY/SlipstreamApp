@@ -162,8 +162,8 @@ class CommandService : Service() {
             // Mark as running before launching
             isSlipstreamRunning = true
             
-            // Run in background thread (JNI blocks during sleep)
-            slipstreamJob = scope.launch {
+            // Run in separate thread to avoid blocking service
+            val slipstreamThread = Thread {
                 try {
                     val result = NativeRunner.runSlipstream(
                         libPath.absolutePath,
@@ -190,6 +190,7 @@ class CommandService : Service() {
                     updateStatus(SlipstreamStatus.Stopped, SocksStatus.Stopped)
                 }
             }
+            slipstreamThread.start()
 
             log("[Service] Step 6: Slipstream thread started")
 
@@ -225,7 +226,7 @@ class CommandService : Service() {
 
         try {
             slipstreamJob?.cancel()
-            slipstreamJob = null
+            // Note: Thread can't be easily killed, so rely on process kill
             isSlipstreamRunning = false
 
             killSlipstreamProcesses()
