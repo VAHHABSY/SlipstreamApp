@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
             addLog("✓ Notification permission granted")
         } else {
             Log.w(TAG, "Notification permission denied")
-            addLog("✗ Notification permission denied")
+            addLog("✗ Notification permission denied - foreground service may fail")
         }
     }
     
@@ -594,6 +594,15 @@ class MainActivity : ComponentActivity() {
             Log.e(TAG, "ERROR: Config missing! domain=${profile.domain.isNotBlank()}, resolvers=${profile.resolvers.isNotBlank()}")
             addLog("❌ Config missing - Resolvers: ${profile.resolvers.isNotBlank()}, Domain: ${profile.domain.isNotBlank()}")
             return
+        }
+        
+        // Check notification permission before starting foreground service
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                Log.e(TAG, "Notification permission denied - cannot start foreground service")
+                addLog("❌ Notification permission required for foreground service")
+                return
+            }
         }
         
         Log.d(TAG, "Config validated - Creating service intent...")
