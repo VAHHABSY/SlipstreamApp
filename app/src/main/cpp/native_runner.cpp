@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 #include <cstdarg>
+#include <unistd.h>  // Added for sleep
 
 #define LOG_TAG "NativeRunner"
 
@@ -93,6 +94,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
             LOGE("slipstream_main failed with code: %d", result);
         } else {
             LOGI("slipstream_main completed successfully");
+            LOGI("Sleeping for 10 seconds to keep tunnel active...");
+            sleep(10);  // Keeps library loaded, tests if tunnel persists
         }
     } else {
         LOGI("slipstream_main not found, trying main function...");
@@ -124,6 +127,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
                 LOGE("main failed with code: %d", result);
             } else {
                 LOGI("main completed successfully");
+                LOGI("Sleeping for 10 seconds to keep tunnel active...");
+                sleep(10);  // Keeps library loaded
             }
             
             free(argv0);
