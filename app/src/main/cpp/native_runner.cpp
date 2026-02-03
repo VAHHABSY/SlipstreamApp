@@ -6,23 +6,12 @@
 #include <cstring>
 #include <cstdio>
 #include <ctime>
-#include <cstdarg>  // Added for va_list
+#include <cstdarg>
 
 #define LOG_TAG "NativeRunner"
-#define LOG_FILE "/sdcard/Android/data/net.typeblob.socks/files/native_log.txt"
 
-#define LOGI(...) do { \
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__); \
-    logToFile(__VA_ARGS__); \
-} while(0)
-
-#define LOGE(...) do { \
-    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__); \
-    logToFile(__VA_ARGS__); \
-} while(0)
-
-void logToFile(const char* format, ...) {
-    FILE* file = fopen(LOG_FILE, "a");
+void logToFile(const char* logFilePath, const char* format, ...) {
+    FILE* file = fopen(logFilePath, "a");
     if (!file) return; // Silent fail if can't open
 
     time_t now = time(nullptr);
@@ -39,6 +28,16 @@ void logToFile(const char* format, ...) {
     fclose(file);
 }
 
+#define LOGI(...) do { \
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__); \
+    logToFile(logFilePath, __VA_ARGS__); \
+} while(0)
+
+#define LOGE(...) do { \
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__); \
+    logToFile(logFilePath, __VA_ARGS__); \
+} while(0)
+
 extern "C" JNIEXPORT jint JNICALL
 Java_net_typeblob_socks_NativeRunner_runSlipstream(
     JNIEnv* env,
@@ -46,16 +45,19 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
     jstring jLibPath,
     jstring jDomain,
     jstring jResolvers,
-    jint jPort) {
+    jint jPort,
+    jstring jLogFilePath) {
     
     const char* libPath = env->GetStringUTFChars(jLibPath, nullptr);
     const char* domain = env->GetStringUTFChars(jDomain, nullptr);
     const char* resolvers = env->GetStringUTFChars(jResolvers, nullptr);
     int port = static_cast<int>(jPort);
+    const char* logFilePath = env->GetStringUTFChars(jLogFilePath, nullptr);
 
     LOGI("=== Starting runSlipstream ===");
     LOGI("Library path: %s", libPath);
     LOGI("Domain: %s, Resolvers: %s, Port: %d", domain, resolvers, port);
+    LOGI("Log file path: %s", logFilePath);
 
     LOGI("Attempting to dlopen library...");
     void* handle = dlopen(libPath, RTLD_NOW | RTLD_LOCAL);
@@ -64,6 +66,7 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
         env->ReleaseStringUTFChars(jLibPath, libPath);
         env->ReleaseStringUTFChars(jDomain, domain);
         env->ReleaseStringUTFChars(jResolvers, resolvers);
+        env->ReleaseStringUTFChars(jLogFilePath, logFilePath);
         LOGI("=== runSlipstream FAILED (dlopen error) ===");
         return -1;
     }
@@ -141,6 +144,7 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
     env->ReleaseStringUTFChars(jLibPath, libPath);
     env->ReleaseStringUTFChars(jDomain, domain);
     env->ReleaseStringUTFChars(jResolvers, resolvers);
+    env->ReleaseStringUTFChars(jLogFilePath, logFilePath);
 
     LOGI("=== runSlipstream COMPLETED with result: %d ===", result);
     return result;

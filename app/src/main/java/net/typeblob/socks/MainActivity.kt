@@ -1,9 +1,5 @@
 package net.typeblob.socks
 
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import android.widget.Toast
 import android.Manifest
 import android.content.ComponentName
 import android.content.Context
@@ -14,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,10 +28,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 
@@ -42,6 +43,7 @@ class MainActivity : ComponentActivity() {
     
     companion object {
         private const val TAG = "SlipstreamApp"
+        private const val REQUEST_STORAGE_PERMISSION = 101
     }
     
     private var commandService: CommandService? = null
@@ -114,6 +116,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate called")
         
+        // Request storage permission for logging (if needed)
+        requestStoragePermission()
+        
         requestNotificationPermission()
         
         setContent {
@@ -125,6 +130,39 @@ class MainActivity : ComponentActivity() {
                     MainScreen()
                 }
             }
+        }
+    }
+    
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            REQUEST_STORAGE_PERMISSION -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    Log.d(TAG, "Storage permission granted")
+                    addLog("✓ Storage permission granted")
+                } else {
+                    Log.w(TAG, "Storage permission denied")
+                    addLog("✗ Storage permission denied - logs may not save to external storage")
+                }
+            }
+        }
+    }
+    
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&  // API 28 and below
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                REQUEST_STORAGE_PERMISSION
+            )
+        } else {
+            Log.d(TAG, "Storage permission not needed or already granted")
         }
     }
     

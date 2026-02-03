@@ -152,6 +152,10 @@ class CommandService : Service() {
             log("[Service] Step 3: Library exists: true")
             log("[Service] Step 4: Library size: ${libPath.length()} bytes")
 
+            // Get log file path in app-private storage
+            val logFilePath = File(applicationInfo.dataDir, "files/native_log.txt").absolutePath
+            log("[Service] Log file path: $logFilePath")
+
             // Load and run slipstream via JNI
             log("[Service] Step 5: Loading library via JNI...")
             
@@ -165,7 +169,8 @@ class CommandService : Service() {
                         libPath.absolutePath,
                         domain,
                         resolvers,
-                        port
+                        port,
+                        logFilePath
                     )
                     
                     if (result == 0) {
