@@ -7,22 +7,13 @@ android {
     namespace = "net.typeblob.socks"
     compileSdk = 34
 
-     defaultConfig {
+    defaultConfig {
         applicationId = "net.typeblob.socks"
         minSdk = 21
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-        ndk {
-            // Temporarily excluding 64-bit ARM. Uncomment when needed:
-            // "arm64-v8a",
-            abiFilters += listOf(
-                "arm64-v8a", // <--- uncomment to re-enable!
-                "armeabi-v7a",
-                "x86",
-                "x86_64"
-            )
-        }
+        // Removed ndk block to use prebuilt binaries only
     }
 
     buildTypes {
@@ -43,11 +34,7 @@ android {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-        }
-    }
+    // Removed externalNativeBuild to skip native compilation
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
