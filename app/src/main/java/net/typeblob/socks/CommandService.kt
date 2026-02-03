@@ -139,7 +139,7 @@ class CommandService : Service() {
         return START_STICKY
     }
 
-    private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
+    private suspend fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
         try {
             log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
 
@@ -171,12 +171,13 @@ class CommandService : Service() {
             log("[Service] Command: ${command.joinToString(" ")}")
             
             // Start the process
-            slipstreamProcess = ProcessBuilder(*command).start()
+            val process = ProcessBuilder(*command).start()
+            slipstreamProcess = process
             
             // Check if process is still alive after a short delay
             delay(2000)  // Wait 2 seconds for startup
-            if (!slipstreamProcess.isAlive()) {
-                val exitCode = slipstreamProcess.exitValue()
+            if (!process.isAlive()) {
+                val exitCode = process.exitValue()
                 log("[Service] Slipstream process died immediately with exit code: $exitCode")
                 throw IOException("Slipstream process failed to start (exit code: $exitCode)")
             }
