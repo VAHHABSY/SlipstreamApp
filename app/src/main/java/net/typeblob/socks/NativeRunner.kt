@@ -3,5 +3,5 @@ object NativeRunner {
         System.loadLibrary("native_runner")
     }
 
-    // Removed runSlipstream - no longer needed
+    external fun runSlipstream(libPath: String, domain: String, resolvers: String, port: Int, logFilePath: String): Int
 }

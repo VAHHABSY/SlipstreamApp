@@ -94,8 +94,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
             LOGE("slipstream_main failed with code: %d", result);
         } else {
             LOGI("slipstream_main completed successfully");
-            LOGI("Sleeping for 60 seconds to keep tunnel active...");
-            sleep(60);
+            LOGI("Sleeping for 3600 seconds (1 hour) to keep tunnel active...");
+            sleep(3600);  // Long sleep to keep tunnel running
         }
     } else {
         LOGI("slipstream_main not found, trying main function...");
@@ -127,8 +127,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
                 LOGE("main failed with code: %d", result);
             } else {
                 LOGI("main completed successfully");
-                LOGI("Sleeping for 60 seconds to keep tunnel active...");
-                sleep(60);
+                LOGI("Sleeping for 3600 seconds (1 hour) to keep tunnel active...");
+                sleep(3600);  // Long sleep
             }
             
             free(argv0);
