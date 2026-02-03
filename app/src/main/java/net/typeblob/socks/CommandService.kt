@@ -21,7 +21,6 @@ class CommandService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var slipstreamJob: Job? = null
-    private var slipstreamProcess: Process? = null
     private var isSlipstreamRunning = false
 
     private var statusCallback: ((SlipstreamStatus, SocksStatus) -> Unit)? = null
@@ -124,7 +123,7 @@ class CommandService : Service() {
                 // Start slipstream
                 startSlipstreamProcess(domain, resolvers, port)
 
-                // Set status to running immediately after process starts and health check
+                // Always set to running after start (rely on job to update if it fails)
                 updateStatus(SlipstreamStatus.Running, SocksStatus.Running)
                 updateNotification("Running", "SOCKS5 proxy on port $port")
                 log("[Service] Tunnel started successfully")
@@ -139,7 +138,7 @@ class CommandService : Service() {
         return START_STICKY
     }
 
-    private suspend fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
+    private fun startSlipstreamProcess(domain: String, resolvers: String, port: Int) {
         try {
             log("[Service] Step 1: Native lib dir: ${applicationInfo.nativeLibraryDir}")
 
@@ -153,48 +152,33 @@ class CommandService : Service() {
             log("[Service] Step 3: Library exists: true")
             log("[Service] Step 4: Library size: ${libPath.length()} bytes")
 
-            // Execute slipstream as a separate process instead of JNI
-            log("[Service] Step 5: Starting slipstream process...")
+            // Load and run slipstream via JNI
+            log("[Service] Step 5: Loading library via JNI...")
             
             // Mark as running before launching
             isSlipstreamRunning = true
             
-            // Build command arguments
-            val command = arrayOf(
-                libPath.absolutePath,
-                domain,
-                resolvers,
-                "--socks-port",
-                port.toString()
-            )
-            
-            log("[Service] Command: ${command.joinToString(" ")}")
-            
-            // Start the process
-            val process = ProcessBuilder(*command).start()
-            slipstreamProcess = process
-            
-            // Check if process is still alive after a short delay
-            delay(2000)  // Wait 2 seconds for startup
-            if (!process.isAlive()) {
-                val exitCode = process.exitValue()
-                log("[Service] Slipstream process died immediately with exit code: $exitCode")
-                throw IOException("Slipstream process failed to start (exit code: $exitCode)")
-            }
-            
-            // Monitor the process in background
+            // Run in background thread since slipstream blocks while running
             slipstreamJob = scope.launch {
                 try {
-                    val exitCode = slipstreamProcess?.waitFor() ?: -1
-                    log("[Service] Slipstream process exited with code: $exitCode")
+                    val result = NativeRunner.runSlipstream(
+                        libPath.absolutePath,
+                        domain,
+                        resolvers,
+                        port
+                    )
                     
-                    if (exitCode == 0) {
+                    if (result == 0) {
                         log("[Service] Slipstream completed successfully")
+                    } else if (result == -1) {
+                        log("[Service] Slipstream failed: Could not load library (dlopen failed)")
+                    } else if (result == -2) {
+                        log("[Service] Slipstream failed: No main or slipstream_main function found")
                     } else {
-                        log("[Service] Slipstream failed with exit code: $exitCode")
+                        log("[Service] Slipstream returned error code: $result")
                     }
                 } catch (e: Exception) {
-                    log("[Service] Slipstream process error: ${e.message}")
+                    log("[Service] Slipstream error: ${e.message}")
                 } finally {
                     isSlipstreamRunning = false
                     log("[Service] Slipstream stopped, updating status")
@@ -202,7 +186,7 @@ class CommandService : Service() {
                 }
             }
 
-            log("[Service] Step 6: Slipstream process started and healthy")
+            log("[Service] Step 6: Slipstream thread started")
 
         } catch (e: Exception) {
             log("[Service] Error: ${e.javaClass.simpleName}: ${e.message}")
@@ -237,11 +221,6 @@ class CommandService : Service() {
         try {
             slipstreamJob?.cancel()
             slipstreamJob = null
-            
-            // Destroy the process if running
-            slipstreamProcess?.destroy()
-            slipstreamProcess = null
-            
             isSlipstreamRunning = false
 
             killSlipstreamProcesses()
