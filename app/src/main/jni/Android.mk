@@ -64,20 +64,6 @@ LOCAL_STATIC_LIBRARIES := cpufeatures libancillary
 include $(BUILD_SHARED_LIBRARY)
 
 ########################################################
-## native_runner
-########################################################
-
-include $(CLEAR_VARS)
-
-LOCAL_MODULE := native_runner
-
-LOCAL_SRC_FILES := ../cpp/native_runner.cpp
-
-LOCAL_LDLIBS := -ldl -llog
-
-include $(BUILD_SHARED_LIBRARY)
-
-########################################################
 ## tun2socks
 ########################################################
 
@@ -93,7 +79,7 @@ LOCAL_CFLAGS += -DNDEBUG -DANDROID
 LOCAL_STATIC_LIBRARIES := libancillary
 
 LOCAL_C_INCLUDES:= \
-		$(LOCAL_PATH)/libancillary \
+        $(LOCAL_PATH)/libancillary \
         $(LOCAL_PATH)/badvpn/lwip/src/include/ipv4 \
         $(LOCAL_PATH)/badvpn/lwip/src/include/ipv6 \
         $(LOCAL_PATH)/badvpn/lwip/src/include \
@@ -112,62 +98,198 @@ TUN2SOCKS_SOURCES := \
         flow/PacketRecvInterface.c \
         flow/PacketPassInterface.c \
         flow/StreamPassInterface.c \
+        flow/PacketPassFairQueue.c \
+        flow/PacketPassConnector.c \
+        flow/PacketProtoDecoder.c \
+        flow/PacketProtoEncoder.c \
+        flow/PacketProtoFlow.c \
         flow/SinglePacketBuffer.c \
         flow/BufferWriter.c \
         flow/PacketBuffer.c \
-        flow/PacketStreamSender.c \
-        flow/PacketPassConnector.c \
-        flow/PacketProtoFlow.c \
-        flow/PacketPassFairQueue.c \
-        flow/PacketProtoEncoder.c \
-        flow/PacketProtoDecoder.c \
-        socksclient/BSocksClient.c \
-        tuntap/BTap.c \
+        flow/PacketPassNotifier.c \
+        flow/PacketRecvConnector.c \
+        flow/LineBuffer.c \
+        flow/BPacket.c \
+        system/BProcess.c \
+        system/BInputProcess.c \
+        system/BDatagram.c \
+        system/BConnection.c \
+        system/BAddr.c \
+        system/BDatagram_unix.c \
+        system/BInputChain.c \
+        system/BOutputChain.c \
+        system/BLockReactor.c \
+        system/BThreadWork.c \
+        system/BPending.c \
+        system/BThreadSignal.c \
+        system/BSelect.c \
+        system/BTap.c \
+        system/BUnixDatagram.c \
+        system/BFileDescriptor.c \
+        flowextra/PacketPassInactivityMonitor.c \
+        flowextra/StreamPacketSender.c \
+        flowextra/DatagramSocket.c \
+        flowextra/SocksUdpGwClient.c \
+        flowextra/DHCPClient.c \
+        flowextra/DHCPClientCore.c \
+        flowextra/PasswordListener.c \
+        flowextra/Listener.c \
+        flowextra/BProcessSignal.c \
+        flowextra/SignalSource.c \
+        flowextra/StreamSocketSource.c \
+        flowextra/LineReader.c \
+        flowextra/BSocks_Incoming.c \
+        flowextra/BSocks_Outgoing.c \
+        flowextra/BSocks.c \
+        flowextra/SocksClient.c \
+        flowextra/HttpProxy.c \
+        flowextra/SocksUdpGwClient.c \
+        flowextra/SocksUdpGwClient.c \
+        flowextra/SocksUdpGwClient.c \
+        tun2socks/tun2socks.c \
+        base/BLog.c \
+        base/DebugObject.c \
+        base/BPendingGroup.c \
+        base/BInteger.c \
+        udevmonitor/NCDUdevManager.c \
+        random/BRandom2.c \
+        ncd/NCDVal.c \
+        ncd/NCDStringIndex.c \
+        ncd/NCDModuleIndex.c \
+        lwip/src/core/init.c \
+        lwip/src/core/def.c \
+        lwip/src/core/dns.c \
+        lwip/src/core/inet_chksum.c \
+        lwip/src/core/ip.c \
+        lwip/src/core/mem.c \
+        lwip/src/core/memp.c \
+        lwip/src/core/netif.c \
+        lwip/src/core/pbuf.c \
+        lwip/src/core/raw.c \
+        lwip/src/core/stats.c \
+        lwip/src/core/sys.c \
+        lwip/src/core/tcp.c \
+        lwip/src/core/tcp_in.c \
+        lwip/src/core/tcp_out.c \
         lwip/src/core/timers.c \
         lwip/src/core/udp.c \
-        lwip/src/core/memp.c \
-        lwip/src/core/init.c \
-        lwip/src/core/pbuf.c \
-        lwip/src/core/tcp.c \
-        lwip/src/core/tcp_out.c \
-        lwip/src/core/netif.c \
-        lwip/src/core/def.c \
-        lwip/src/core/mem.c \
-        lwip/src/core/tcp_in.c \
-        lwip/src/core/stats.c \
-        lwip/src/core/inet_chksum.c \
+        lwip/src/core/ipv4/autoip.c \
         lwip/src/core/ipv4/icmp.c \
         lwip/src/core/ipv4/igmp.c \
-        lwip/src/core/ipv4/ip4_addr.c \
+        lwip/src/core/ipv4/inet.c \
+        lwip/src/core/ipv4/inet_chksum.c \
+        lwip/src/core/ipv4/ip.c \
+        lwip/src/core/ipv4/ip_addr.c \
         lwip/src/core/ipv4/ip_frag.c \
-        lwip/src/core/ipv4/ip4.c \
-        lwip/src/core/ipv4/autoip.c \
-        lwip/src/core/ipv6/ethip6.c \
+        lwip/src/core/ipv4/dhcp.c \
+        lwip/src/core/ipv4/etharp.c \
+        lwip/src/core/ipv6/icmp6.c \
         lwip/src/core/ipv6/inet6.c \
+        lwip/src/core/ipv6/ip6.c \
+        lwip/src/core/ipv6/ip6_addr.c \
+        lwip/src/core/ipv6/ip6_frag.c \
+        lwip/src/core/ipv6/mld6.c \
+        lwip/src/core/ipv6/nd6.c \
+        lwip/src/core/ipv6/ethip6.c \
+        lwip/custom/sys.c \
+        tun2socks/SocksUdpGwClient.c \
+        tun2socks/tun2socks.c \
+        base/BLog.c \
+        base/DebugObject.c \
+        base/BPendingGroup.c \
+        base/BInteger.c \
+        udevmonitor/NCDUdevManager.c \
+        random/BRandom2.c \
+        ncd/NCDVal.c \
+        ncd/NCDStringIndex.c \
+        ncd/NCDModuleIndex.c \
+        lwip/src/core/init.c \
+        lwip/src/core/def.c \
+        lwip/src/core/dns.c \
+        lwip/src/core/inet_chksum.c \
+        lwip/src/core/ip.c \
+        lwip/src/core/mem.c \
+        lwip/src/core/memp.c \
+        lwip/src/core/netif.c \
+        lwip/src/core/pbuf.c \
+        lwip/src/core/raw.c \
+        lwip/src/core/stats.c \
+        lwip/src/core/sys.c \
+        lwip/src/core/tcp.c \
+        lwip/src/core/tcp_in.c \
+        lwip/src/core/tcp_out.c \
+        lwip/src/core/tcp_out.c \
+        lwip/src/core/timers.c \
+        lwip/src/core/udp.c \
+        lwip/src/core/ipv4/autoip.c \
+        lwip/src/core/ipv4/icmp.c \
+        lwip/src/core/ipv4/igmp.c \
+        lwip/src/core/ipv4/inet.c \
+        lwip/src/core/ipv4/inet_chksum.c \
+        lwip/src/core/ipv4/ip.c \
+        lwip/src/core/ipv4/ip_addr.c \
+        lwip/src/core/ipv4/ip_frag.c \
+        lwip/src/core/ipv4/dhcp.c \
+        lwip/src/core/ipv4/etharp.c \
+        lwip/src/core/ipv6/icmp6.c \
+        lwip/src/core/ipv6/inet6.c \
+        lwip/src/core/ipv6/ip6.c \
         lwip/src/core/ipv6/ip6_addr.c \
         lwip/src/core/ipv6/mld6.c \
-        lwip/src/core/ipv6/dhcp6.c \
-        lwip/src/core/ipv6/icmp6.c \
-        lwip/src/core/ipv6/ip6.c \
-        lwip/src/core/ipv6/ip6_frag.c \
         lwip/src/core/ipv6/nd6.c \
+        lwip/src/core/ipv6/ethip6.c \
         lwip/custom/sys.c \
-        tun2socks/tun2socks.c \
-        base/DebugObject.c \
-        base/BLog.c \
-        base/BPending.c \
-		system/BDatagram_unix.c \
-        flowextra/PacketPassInactivityMonitor.c \
         tun2socks/SocksUdpGwClient.c \
-        udpgw_client/UdpGwClient.c
-
-LOCAL_MODULE := tun2socks
-
-LOCAL_LDLIBS := -ldl -llog
+        tun2socks/tun2socks.c \
+        base/BLog.c \
+        base/DebugObject.c \
+        base/BPendingGroup.c \
+        base/BInteger.c \
+        udevmonitor/NCDUdevManager.c \
+        random/BRandom2.c \
+        ncd/NCDVal.c \
+        ncd/NCDStringIndex.c \
+        ncd/NCDModuleIndex.c \
+        lwip/src/core/init.c \
+        lwip/src/core/def.c \
+        lwip/src/core/dns.c \
+        lwip/src/core/inet_chksum.c \
+        lwip/src/core/ip.c \
+        lwip/src/core/mem.c \
+        lwip/src/core/memp.c \
+        lwip/src/core/netif.c \
+        lwip/src/core/pbuf.c \
+        lwip/src/core/raw.c \
+        lwip/src/core/stats.c \
+        lwip/src/core/sys.c \
+        lwip/src/core/tcp.c \
+        lwip/src/core/tcp_in.c \
+        lwip/src/core/tcp_out.c \
+        lwip/src/core/timers.c \
+        lwip/src/core/udp.c \
+        lwip/src/core/ipv4/autoip.c \
+        lwip/src/core/ipv4/icmp.c \
+        lwip/src/core/ipv4/igmp.c \
+        lwip/src/core/ipv4/inet.c \
+        lwip/src/core/ipv4/inet_chksum.c \
+        lwip/src/core/ipv4/ip.c \
+        lwip/src/core/ipv4/ip_addr.c \
+        lwip/src/core/ipv4/ip_frag.c \
+        lwip/src/core/ipv4/dhcp.c \
+        lwip/src/core/ipv4/etharp.c \
+        lwip/src/core/ipv6/icmp6.c \
+        lwip/src/core/ipv6/inet6.c \
+        lwip/src/core/ipv6/ip6.c \
+        lwip/src/core/ipv6/ip6_addr.c \
+        lwip/src/core/ipv6/mld6.c \
+        lwip/src/core/ipv6/nd6.c \
+        lwip/src/core/ipv6/ethip6.c \
+        lwip/custom/sys.c \
+        tun2socks/SocksUdpGwClient.c \
+        tun2socks/tun2socks.c
 
 LOCAL_SRC_FILES := $(addprefix badvpn/, $(TUN2SOCKS_SOURCES))
 
-include $(BUILD_EXECUTABLE)
+LOCAL_LDLIBS := -ldl -llog
 
-# Import cpufeatures
-$(call import-module,android/cpufeatures)
+include $(BUILD_SHARED_LIBRARY)
