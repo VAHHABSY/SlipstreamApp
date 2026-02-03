@@ -7,13 +7,13 @@
 #include <cstdio>
 #include <ctime>
 #include <cstdarg>
-#include <unistd.h>  // Added for sleep
+#include <unistd.h>
 
 #define LOG_TAG "NativeRunner"
 
 void logToFile(const char* logFilePath, const char* format, ...) {
     FILE* file = fopen(logFilePath, "a");
-    if (!file) return; // Silent fail if can't open
+    if (!file) return;
 
     time_t now = time(nullptr);
     char timeStr[20];
@@ -94,8 +94,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
             LOGE("slipstream_main failed with code: %d", result);
         } else {
             LOGI("slipstream_main completed successfully");
-            LOGI("Sleeping for 10 seconds to keep tunnel active...");
-            sleep(10);  // Keeps library loaded, tests if tunnel persists
+            LOGI("Sleeping for 60 seconds to keep tunnel active...");
+            sleep(60);
         }
     } else {
         LOGI("slipstream_main not found, trying main function...");
@@ -127,8 +127,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
                 LOGE("main failed with code: %d", result);
             } else {
                 LOGI("main completed successfully");
-                LOGI("Sleeping for 10 seconds to keep tunnel active...");
-                sleep(10);  // Keeps library loaded
+                LOGI("Sleeping for 60 seconds to keep tunnel active...");
+                sleep(60);
             }
             
             free(argv0);
@@ -142,9 +142,8 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
         }
     }
 
-    LOGI("Calling dlclose...");
-    dlclose(handle);
-    LOGI("dlclose done");
+    // Removed dlclose to keep library loaded
+    LOGI("Library kept loaded to maintain tunnel");
 
     env->ReleaseStringUTFChars(jLibPath, libPath);
     env->ReleaseStringUTFChars(jDomain, domain);
