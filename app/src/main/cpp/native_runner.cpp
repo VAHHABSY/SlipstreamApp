@@ -4,10 +4,39 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cstdio>
+#include <ctime>
 
 #define LOG_TAG "NativeRunner"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOG_FILE "/data/data/net.typeblob.socks/files/native_log.txt"
+
+#define LOGI(...) do { \
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__); \
+    logToFile(__VA_ARGS__); \
+} while(0)
+
+#define LOGE(...) do { \
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__); \
+    logToFile(__VA_ARGS__); \
+} while(0)
+
+void logToFile(const char* format, ...) {
+    FILE* file = fopen(LOG_FILE, "a");
+    if (!file) return; // Silent fail if can't open
+
+    time_t now = time(nullptr);
+    char timeStr[20];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    fprintf(file, "[%s] ", timeStr);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(file, format, args);
+    va_end(args);
+
+    fprintf(file, "\n");
+    fclose(file);
+}
 
 extern "C" JNIEXPORT jint JNICALL
 Java_net_typeblob_socks_NativeRunner_runSlipstream(
@@ -23,40 +52,53 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
     const char* resolvers = env->GetStringUTFChars(jResolvers, nullptr);
     int port = static_cast<int>(jPort);
 
-    LOGI("Loading library: %s", libPath);
+    LOGI("=== Starting runSlipstream ===");
+    LOGI("Library path: %s", libPath);
     LOGI("Domain: %s, Resolvers: %s, Port: %d", domain, resolvers, port);
 
+    LOGI("Attempting to dlopen library...");
     void* handle = dlopen(libPath, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
-        LOGE("Failed to dlopen %s: %s", libPath, dlerror());
+        LOGE("dlopen FAILED for %s: %s", libPath, dlerror());
         env->ReleaseStringUTFChars(jLibPath, libPath);
         env->ReleaseStringUTFChars(jDomain, domain);
         env->ReleaseStringUTFChars(jResolvers, resolvers);
+        LOGI("=== runSlipstream FAILED (dlopen error) ===");
         return -1;
     }
-
-    LOGI("Library loaded successfully");
+    LOGI("dlopen SUCCESS: Library loaded at %p", handle);
 
     int result = -1;
 
+    LOGI("Searching for slipstream_main function...");
     typedef int (*SlipstreamMainFunc)(const char*, const char*, int);
     SlipstreamMainFunc slipstream_main = 
         reinterpret_cast<SlipstreamMainFunc>(dlsym(handle, "slipstream_main"));
+    const char* dlsym_error = dlerror();
+    if (dlsym_error) {
+        LOGI("dlsym error for slipstream_main: %s", dlsym_error);
+    }
 
     if (slipstream_main) {
-        LOGI("Found slipstream_main, calling with domain=%s, resolvers=%s, port=%d", 
+        LOGI("slipstream_main found, calling with domain=%s, resolvers=%s, port=%d", 
              domain, resolvers, port);
+        LOGI("Calling slipstream_main...");
         result = slipstream_main(domain, resolvers, port);
+        LOGI("slipstream_main returned: %d", result);
         if (result != 0) {
             LOGE("slipstream_main failed with code: %d", result);
         } else {
             LOGI("slipstream_main completed successfully");
         }
     } else {
-        LOGI("slipstream_main not found, trying main function");
+        LOGI("slipstream_main not found, trying main function...");
         
         typedef int (*MainFunc)(int, char**);
         MainFunc main_func = reinterpret_cast<MainFunc>(dlsym(handle, "main"));
+        const char* main_dlsym_error = dlerror();
+        if (main_dlsym_error) {
+            LOGI("dlsym error for main: %s", main_dlsym_error);
+        }
         
         if (main_func) {
             std::string portStr = std::to_string(port);
@@ -69,8 +111,11 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
             
             char* args[] = { argv0, argv1, argv2, argv3, argv4, nullptr };
             
-            LOGI("Found main, calling with argc=5");
+            LOGI("main found, calling with argc=5, argv: %s %s %s %s %s", 
+                 args[0], args[1], args[2], args[3], args[4]);
+            LOGI("Calling main...");
             result = main_func(5, args);
+            LOGI("main returned: %d", result);
             if (result != 0) {
                 LOGE("main failed with code: %d", result);
             } else {
@@ -83,16 +128,19 @@ Java_net_typeblob_socks_NativeRunner_runSlipstream(
             free(argv3);
             free(argv4);
         } else {
-            LOGE("Neither slipstream_main nor main found in library: %s", dlerror());
+            LOGE("Neither slipstream_main nor main found in library");
             result = -2;
         }
     }
 
+    LOGI("Calling dlclose...");
     dlclose(handle);
+    LOGI("dlclose done");
 
     env->ReleaseStringUTFChars(jLibPath, libPath);
     env->ReleaseStringUTFChars(jDomain, domain);
     env->ReleaseStringUTFChars(jResolvers, resolvers);
 
+    LOGI("=== runSlipstream COMPLETED with result: %d ===", result);
     return result;
 }
