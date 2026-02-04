@@ -40,6 +40,27 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+        // Store the log file Uri selected by the user
+        private var logFileUri: android.net.Uri? = null
+
+        // Launcher for Storage Access Framework file picker
+        private val createLogFileLauncher = registerForActivityResult(
+            ActivityResultContracts.CreateDocument("text/plain")
+        ) { uri ->
+            if (uri != null) {
+                logFileUri = uri
+                addLog("✓ Log file selected: $uri")
+            } else {
+                addLog("✗ Log file selection cancelled")
+            }
+        }
+
+        private fun ensureLogFileSelected() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && logFileUri == null) {
+                // Prompt user to select/create log file in Downloads/slipstreamapp/log.log
+                createLogFileLauncher.launch("SlipstreamApp/log.log")
+            }
+        }
     
     companion object {
         private const val TAG = "SlipstreamApp"
@@ -118,9 +139,12 @@ class MainActivity : ComponentActivity() {
         
         // Request storage permission for logging (if needed)
         requestStoragePermission()
-        
+
         requestNotificationPermission()
-        
+
+        // Prompt user to select log file if needed
+        ensureLogFileSelected()
+
         setContent {
             MaterialTheme {
                 Surface(
@@ -215,6 +239,32 @@ class MainActivity : ComponentActivity() {
             .format(java.util.Date())
         val logMessage = "[$timestamp] $message"
         Log.d(TAG, "Log: $message")
+
+        // Save to file using Storage Access Framework on Android 10+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (logFileUri == null) {
+                ensureLogFileSelected()
+            } else {
+                try {
+                    val outputStream = contentResolver.openOutputStream(logFileUri!!, "wa")
+                    outputStream?.bufferedWriter()?.use { it.append(logMessage + "\n") }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to write log to SAF file", e)
+                }
+            }
+        } else {
+            // Save to file in Downloads/slipstreamapp/log.log for legacy devices
+            try {
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                val appDir = java.io.File(downloadsDir, "SlipstreamApp")
+                if (!appDir.exists()) appDir.mkdirs()
+                val logFile = java.io.File(appDir, "log.log")
+                logFile.appendText(logMessage + "\n")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to write log to file", e)
+            }
+        }
+
         // Update list on UI thread (in case called from background)
         runOnUiThread {
             // Keep list bounded (optional)
